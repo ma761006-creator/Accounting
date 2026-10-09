@@ -15,7 +15,7 @@
  */
 
 // 記帳分類。「其他」用來接住不屬於前四類的消費，不需要可以刪掉。
-var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '其他'];
+var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '其他'];
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
 
@@ -310,6 +310,20 @@ function getDefaultKeywords_() {
       '全聯', '家樂福', '好市多', 'costco', '屈臣氏', '康是美', '寶雅', '大創',
       '衛生紙', '洗衣精', '洗碗精', '牙膏', '牙刷', '洗髮精', '沐浴乳', '垃圾袋', '清潔', '電池'
     ],
+    '育兒': [
+      '尿布', '紙尿褲', '奶粉', '奶瓶', '奶嘴', '副食品', '嬰兒', '寶寶', '幼兒', '兒童', '童裝', '童鞋',
+      '玩具', '繪本', '托嬰', '保母', '褓姆', '幼兒園', '幼稚園', '安親班', '才藝', '學費', '補習',
+      '親子', '麗嬰房', '玩具反斗城'
+    ],
+    '旅遊': [
+      '旅遊', '旅行', '出國', '機票', '住宿', '飯店', '旅館', '民宿', '訂房', 'agoda', 'booking', 'airbnb',
+      '旅行社', '行程', '伴手禮', '露營', '溫泉', '雄獅', '易遊網', 'klook', 'kkday'
+    ],
+    '娛樂': [
+      '電影', '威秀', '國賓', 'ktv', '錢櫃', '好樂迪', '遊樂園', '樂園', '展覽', '演唱會', '門票', '健身',
+      '游泳', '運動中心', '球場', '遊戲', 'switch', 'steam', 'netflix', 'spotify', 'youtube', 'disney',
+      '桌遊', '漫畫', '書店', '誠品'
+    ],
     '醫療': [
       '掛號', '看診', '診所', '醫院', '藥局', '藥', '牙醫', '牙科', '保健', '維他命', '眼科', '復健', '疫苗'
     ]
@@ -572,7 +586,7 @@ function readCustomKeywords_() {
   if (!sheet || sheet.getLastRow() < 2) return [];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues()
     .filter(function (r) {
-      return String(r[0]).trim() && CATEGORIES.indexOf(String(r[1]).trim()) >= 0;
+      return String(r[0]).trim() && !/^（例）/.test(String(r[0]).trim()) && CATEGORIES.indexOf(String(r[1]).trim()) >= 0;
     })
     .map(function (r) {
       return { word: String(r[0]).trim().toLowerCase(), category: String(r[1]).trim() };
@@ -580,6 +594,101 @@ function readCustomKeywords_() {
 }
 
 /** 建立「關鍵字」工作表（setup 時呼叫）。 */
+/**
+ * 用 LINE 管理自訂關鍵字：
+ *   關鍵字                → 列出自訂關鍵字
+ *   關鍵字 健身房 其他      → 品項有「健身房」就歸到「其他」（已存在就更新）
+ *   健身房 歸類到 醫療      → 同上
+ *   關鍵字 刪除 健身房      → 刪除
+ * 不是關鍵字指令回傳 null。
+ */
+function parseKeywordCommand_(text) {
+  var t = normalizeText_(text).trim();
+  var catPattern = '(' + CATEGORIES.join('|') + ')';
+  var natural = t.match(new RegExp('^(.+?)\\s*(?:歸類到|歸類為|歸類|歸到|分類到|分類為|分到)\\s*' + catPattern + '$'));
+  // 「這筆歸類到交通」是要改某一筆帳，不是新增關鍵字
+  if (natural && !/^(這|那|剛剛|剛才|最近|上一|前一)/.test(natural[1])) {
+    return { action: 'upsert', word: natural[1].trim(), category: natural[2] };
+  }
+
+  var m = t.match(/^(?:關鍵字|關鍵詞)\s*(.*)$/);
+  if (!m) return null;
+  var rest = m[1].trim();
+  if (!rest || /^(清單|列表|查詢|有哪些)$/.test(rest)) return { action: 'list' };
+  var del = rest.match(/^(?:刪除|移除)\s*(.+)$/);
+  if (del) return { action: 'delete', word: del[1].trim() };
+  var add = rest.match(new RegExp('^(.+?)\\s*[=＝:：→]?\\s*' + catPattern + '$'));
+  if (add && add[1].trim()) return { action: 'upsert', word: add[1].trim(), category: add[2] };
+  return { action: 'invalid' };
+}
+
+function keywordUsage_() {
+  return [
+    '自訂分類關鍵字的用法：',
+    '・關鍵字 健身房 其他 → 品項有「健身房」就記成其他',
+    '・健身房 歸類到 醫療 → 同上，換成醫療',
+    '・關鍵字 刪除 健身房',
+    '・關鍵字 → 看目前的自訂關鍵字',
+    '',
+    '分類：' + CATEGORIES.join('、')
+  ].join('\n');
+}
+
+function applyKeywordCommand_(cmd) {
+  if (cmd.action === 'invalid') return keywordUsage_();
+  ensureKeywordSheet_();
+  var sheet = getSpreadsheet_().getSheetByName(KEYWORD_SHEET_NAME);
+  if (cmd.action === 'list') {
+    var list = readCustomKeywords_();
+    if (!list.length) return '目前沒有自訂關鍵字。\n\n' + keywordUsage_();
+    return '🏷️ 自訂關鍵字（優先於內建）\n' + list.map(function (k) {
+      return '・' + k.word + ' → ' + k.category;
+    }).join('\n') + '\n\n新增：關鍵字 健身房 其他｜刪除：關鍵字 刪除 健身房';
+  }
+
+  var target = cmd.word.toLowerCase();
+  var row = 0;
+  if (sheet.getLastRow() >= 2) {
+    var words = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < words.length; i++) {
+      if (String(words[i][0]).trim().toLowerCase() === target) {
+        row = i + 2;
+        break;
+      }
+    }
+  }
+  if (cmd.action === 'delete') {
+    if (!row) return '找不到關鍵字「' + cmd.word + '」。傳「關鍵字」可以看目前的清單。';
+    sheet.deleteRow(row);
+    return '🗑️ 已刪除關鍵字「' + cmd.word + '」';
+  }
+  if (row) {
+    sheet.getRange(row, 1, 1, 2).setValues([[cmd.word, cmd.category]]);
+  } else {
+    sheet.appendRow([cmd.word, cmd.category]);
+  }
+  return '🏷️ 已' + (row ? '更新' : '新增') + '關鍵字：' + cmd.word + ' → ' + cmd.category +
+    '\n之後品項有「' + cmd.word + '」就會記成' + cmd.category + '（AI 記帳也一樣）。\n已經記好的帳不會改，要改請傳「修改 ' + cmd.category + '」。';
+}
+
+/** AI 記帳後套用自訂關鍵字：家人設定的分類優先於 AI 的判斷。 */
+function applyCustomKeywords_(entries) {
+  var custom = readCustomKeywords_().sort(function (a, b) {
+    return b.word.length - a.word.length;
+  });
+  if (!custom.length) return entries;
+  entries.forEach(function (e) {
+    var text = (e.item + ' ' + (e.note || '')).toLowerCase();
+    for (var i = 0; i < custom.length; i++) {
+      if (text.indexOf(custom[i].word) >= 0) {
+        e.category = custom[i].category;
+        break;
+      }
+    }
+  });
+  return entries;
+}
+
 function ensureKeywordSheet_() {
   var ss = getSpreadsheet_();
   if (ss.getSheetByName(KEYWORD_SHEET_NAME)) return;
@@ -1685,6 +1794,9 @@ function buildSystemPrompt_(today) {
     '- 交通：油錢、停車、捷運、公車、高鐵、計程車、過路費、車輛保養',
     '- 日用品：清潔用品、衛生紙、盥洗用品、家用小物',
     '- 醫療：看診、掛號、藥品、保健食品、牙醫',
+    '- 育兒：尿布、奶粉、副食品、嬰幼兒用品、童裝、玩具、托嬰、幼兒園、安親班、才藝課、小孩的學費與疫苗以外的花費',
+    '- 旅遊：出國或國內旅行的住宿、機票、行程、門票、旅行社、伴手禮（旅途中的三餐、交通可依內容記成餐飲、交通）',
+    '- 娛樂：電影、KTV、遊樂園、展覽、演唱會、健身房、運動、遊戲、影音串流、興趣嗜好',
     '- 其他：不屬於以上分類的消費',
     '',
     '判斷 intent：',
@@ -1920,6 +2032,7 @@ function helpText_() {
     '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除重複',
     '',
     '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
+    '🏷️ 分類關鍵字：關鍵字 健身房 其他、關鍵字（看清單）',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
     '分類：' + CATEGORIES.join('、'),
@@ -2070,6 +2183,13 @@ function handleEvent_(event) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
+    var keywordCmd = parseKeywordCommand_(text);
+    if (keywordCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyKeywordCommand_(keywordCmd);
+      }));
+      return;
+    }
     var modifyCmd = parseModifyCommand_(text, today0);
     if (modifyCmd) {
       replyText_(event.replyToken, withLock_(function () {
@@ -2101,6 +2221,9 @@ function handleEvent_(event) {
 
   // 照片：同一張發票不會有兩筆一模一樣的帳，也不會另外多一筆「總計」
   if (message.type === 'image') parsed.entries = dedupeReceiptEntries_(parsed.entries);
+
+  // AI 判斷的分類以家人設定的關鍵字為準（規則辨識本來就會用）
+  if (getProvider_() !== 'rules' && !parsed.aiError) parsed.entries = applyCustomKeywords_(parsed.entries);
 
   if (parsed.intent === 'record' && parsed.entries.length > 0) {
     var recorder = getDisplayName_(event.source);
