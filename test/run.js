@@ -329,13 +329,21 @@ test('Gemini 關閉思考以加快回覆；模型不支援時自動改回預設'
   assert.deepStrictEqual(env.geminiRequests[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
 
   // 模型不能關閉思考 → 不帶 thinkingConfig 重送，照樣記帳，之後也不再帶
-  env.geminiStatuses.push({ code: 400, message: 'Budget 0 is invalid. This model only works in thinking mode.' });
+  env.geminiStatuses.push({ code: 400, message: 'Invalid value at generation_config.thinking_config' });
   env.post({ type: 'text', id: '2', text: '晚餐 100' });
   assert.strictEqual(env.geminiRequests.length, 3);
   assert.strictEqual(env.geminiRequests[2].body.generationConfig.thinkingConfig, undefined);
   env.post({ type: 'text', id: '3', text: '宵夜 100' });
   assert.strictEqual(env.geminiRequests[3].body.generationConfig.thinkingConfig, undefined);
   assert.deepStrictEqual(env.rows.slice(1).map((r) => r[3]), ['午餐', '晚餐', '宵夜']);
+});
+
+test('Gemini 400 時照片回覆附上 Gemini 的錯誤說明', () => {
+  const env = createEnv([], { GEMINI_API_KEY: 'g' });
+  env.geminiStatuses.push({ code: 400, message: 'x' }, { code: 400, message: 'Unsupported MIME type: image/heic' });
+  env.post({ type: 'image', id: 'i1' });
+  assert.strictEqual(env.geminiRequests.length, 2); // 第一次帶關閉思考，第二次拿掉重送
+  assert.match(env.replies[0], /Gemini API 錯誤 400：Unsupported MIME type: image\/heic/);
 });
 
 test('AI_PROVIDER=claude 時即使有 Gemini 金鑰也用 Claude', () => {

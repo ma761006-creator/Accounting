@@ -63,19 +63,27 @@ function parseWithGemini_(input, today) {
   };
   var res = send();
   var status = res.getResponseCode();
-  // 有些模型不能關掉思考：記住這件事（6 小時），改用預設設定重送
-  if (status === 400 && body.generationConfig.thinkingConfig && /thinking/i.test(res.getContentText())) {
-    console.warn('Gemini 模型 ' + model + ' 不支援關閉思考，改用預設設定');
-    cache.put(noThinkKey, '1', 6 * 60 * 60);
+  // 有些模型不能關掉思考，錯誤訊息的寫法也不一定：只要是 400 就拿掉這個設定重送一次，
+  // 重送成功代表就是這個原因，記住 6 小時
+  if (status === 400 && body.generationConfig.thinkingConfig) {
+    console.warn('Gemini 400，改用預設思考設定重送：' + res.getContentText().slice(0, 300));
     delete body.generationConfig.thinkingConfig;
     res = send();
     status = res.getResponseCode();
+    if (status === 200) cache.put(noThinkKey, '1', 6 * 60 * 60);
   }
   if (status !== 200) {
     console.error('Gemini API 錯誤 ' + status + '：' + res.getContentText().slice(0, 1000));
     if (status === 429) throw new Error('Gemini 免費額度已用完');
     if (status >= 500) throw new Error('Gemini 暫時忙線');
-    throw new Error('Gemini API 錯誤 ' + status + '（請檢查 GEMINI_API_KEY 或 GEMINI_MODEL）');
+    // 附上 Gemini 的錯誤說明（不含金鑰），方便排查
+    var detail = '';
+    try {
+      detail = JSON.parse(res.getContentText()).error.message || '';
+    } catch (e) {
+      detail = '';
+    }
+    throw new Error('Gemini API 錯誤 ' + status + (detail ? '：' + detail.slice(0, 150) : '（請檢查 GEMINI_API_KEY 或 GEMINI_MODEL）'));
   }
 
   var data = JSON.parse(res.getContentText());
