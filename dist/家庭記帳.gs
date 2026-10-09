@@ -252,12 +252,17 @@ function getDisplayName_(source) {
 }
 
 /** 下載使用者傳來的圖片，回傳 { imageBase64, mediaType }。 */
-function getImageContent_(messageId) {
-  var res = lineFetch_('https://api-data.line.me/v2/bot/message/' + messageId + '/content', {
-    method: 'get'
-  });
+function getImageContent_(message) {
+  // 從其他 App 分享的照片可能存在外部網址（contentProvider.type = external），要直接從那裡下載
+  var provider = message.contentProvider || {};
+  var res = provider.type === 'external' && provider.originalContentUrl
+    ? UrlFetchApp.fetch(provider.originalContentUrl, { muteHttpExceptions: true })
+    : lineFetch_('https://api-data.line.me/v2/bot/message/' + message.id + '/content', { method: 'get' });
   if (res.getResponseCode() !== 200) {
-    throw new Error('下載圖片失敗 ' + res.getResponseCode());
+    // 詳細原因只寫在執行紀錄，不回給使用者
+    console.error('下載圖片失敗 ' + res.getResponseCode() + '：' + res.getContentText().slice(0, 500) +
+      '｜contentProvider=' + JSON.stringify(provider));
+    throw new Error('照片下載失敗');
   }
   var blob = res.getBlob();
   return {
@@ -1917,6 +1922,9 @@ function doPost(e) {
 function friendlyError_(err, event) {
   var msg = String((err && err.message) || err);
   var isImage = event.message && event.message.type === 'image';
+  if (/照片下載失敗/.test(msg)) {
+    return '⚠️ 這張照片下載失敗，請重新拍照或從相簿重新傳一次（不要用轉傳的）。\n也可以先用文字記帳，例如「全聯 560」。';
+  }
   if (/忙線|額度/.test(msg)) {
     return '⏳ ' + msg + '，' + (isImage ? '照片暫時無法辨識，請稍後再傳一次，或先用文字記帳，例如「全聯 560」。' : '請稍後再試一次。');
   }
@@ -1997,7 +2005,7 @@ function handleEvent_(event) {
       }
       return;
     }
-    input = getImageContent_(message.id);
+    input = getImageContent_(message);
   } else {
     return;
   }

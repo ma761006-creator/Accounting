@@ -17,6 +17,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
   const pushes = [];
   const triggers = [];
   const geminiStatuses = [];
+  const imageStatus = { code: 200 };
   const replies = [];
   const quickReplies = [];
   const claudeRequests = [];
@@ -147,6 +148,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
           return response(200, { displayName: '爸爸' });
         }
         if (url.startsWith('https://api-data.line.me/v2/bot/message/')) {
+          if (imageStatus.code !== 200) return response(imageStatus.code, { message: 'Authentication failed' });
           return response(200, '', { getBytes: () => [1, 2, 3], getContentType: () => 'image/jpeg' });
         }
         throw new Error('unexpected fetch ' + url);
@@ -176,7 +178,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     return event;
   };
 
-  return { context, props, rows, sheets, replies, quickReplies, pushes, triggers, geminiStatuses, claudeRequests, geminiRequests, post };
+  return { context, props, rows, sheets, replies, quickReplies, imageStatus, pushes, triggers, geminiStatuses, claudeRequests, geminiRequests, post };
 }
 
 const tests = [];
@@ -503,6 +505,15 @@ test('快速選單：按鈕送出的指令都能直接處理，開了 AI 也不�
   assert.strictEqual(env.context.isFixedCommand_('本月 明細'), true);
   assert.strictEqual(env.context.isFixedCommand_('幫我分析這個月的消費'), false);
   assert.strictEqual(env.context.isFixedCommand_('本月全聯'), false);
+});
+
+test('照片下載失敗時回覆好懂的訊息，不顯示錯誤代碼', () => {
+  const env = createEnv([], { GEMINI_API_KEY: 'g' });
+  env.imageStatus.code = 401;
+  env.post({ type: 'image', id: 'img1' });
+  assert.match(env.replies[0], /照片下載失敗，請重新拍照/);
+  assert.ok(!/401/.test(env.replies[0]));
+  assert.strictEqual(env.rows.length, 0);
 });
 
 test('查詢回覆：10 筆以內直接列出明細', () => {

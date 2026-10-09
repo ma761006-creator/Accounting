@@ -106,6 +106,9 @@ function doPost(e) {
 function friendlyError_(err, event) {
   var msg = String((err && err.message) || err);
   var isImage = event.message && event.message.type === 'image';
+  if (/照片下載失敗/.test(msg)) {
+    return '⚠️ 這張照片下載失敗，請重新拍照或從相簿重新傳一次（不要用轉傳的）。\n也可以先用文字記帳，例如「全聯 560」。';
+  }
   if (/忙線|額度/.test(msg)) {
     return '⏳ ' + msg + '，' + (isImage ? '照片暫時無法辨識，請稍後再傳一次，或先用文字記帳，例如「全聯 560」。' : '請稍後再試一次。');
   }
@@ -186,7 +189,7 @@ function handleEvent_(event) {
       }
       return;
     }
-    input = getImageContent_(message.id);
+    input = getImageContent_(message);
   } else {
     return;
   }

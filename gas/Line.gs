@@ -76,12 +76,17 @@ function getDisplayName_(source) {
 }
 
 /** 下載使用者傳來的圖片，回傳 { imageBase64, mediaType }。 */
-function getImageContent_(messageId) {
-  var res = lineFetch_('https://api-data.line.me/v2/bot/message/' + messageId + '/content', {
-    method: 'get'
-  });
+function getImageContent_(message) {
+  // 從其他 App 分享的照片可能存在外部網址（contentProvider.type = external），要直接從那裡下載
+  var provider = message.contentProvider || {};
+  var res = provider.type === 'external' && provider.originalContentUrl
+    ? UrlFetchApp.fetch(provider.originalContentUrl, { muteHttpExceptions: true })
+    : lineFetch_('https://api-data.line.me/v2/bot/message/' + message.id + '/content', { method: 'get' });
   if (res.getResponseCode() !== 200) {
-    throw new Error('下載圖片失敗 ' + res.getResponseCode());
+    // 詳細原因只寫在執行紀錄，不回給使用者
+    console.error('下載圖片失敗 ' + res.getResponseCode() + '：' + res.getContentText().slice(0, 500) +
+      '｜contentProvider=' + JSON.stringify(provider));
+    throw new Error('照片下載失敗');
   }
   var blob = res.getBlob();
   return {
