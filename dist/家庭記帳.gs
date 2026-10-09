@@ -437,6 +437,11 @@ function parseQuery_(t, today) {
   s = withoutSuffix;
   // 有「花多少」「明細」這類字眼，才確定是查詢
   var explicit = askedHowMuch || detail;
+  if (explicit) {
+    // 「我這個月花多少錢」「我們家今天總共花多少」：去掉主詞和「總共」，不然會被當成搜尋字
+    s = s.replace(/^(我們家|我們|我家|全家|家裡|大家|我)\s*/, '').replace(/\s*(總共|一共|全部|共)$/, '').trim();
+    if (s === '全部' || s === '總共') s = '';
+  }
 
   var category = '全部';
   var tokens = s.split(/\s+/).filter(function (p) {
@@ -467,6 +472,9 @@ function parseQuery_(t, today) {
     '昨天': [addDays_(today, -1), addDays_(today, -1)],
     '本週': [startOfWeek_(today), today],
     '這週': [startOfWeek_(today), today],
+    '這禮拜': [startOfWeek_(today), today],
+    '上週': [addDays_(startOfWeek_(today), -7), addDays_(startOfWeek_(today), -1)],
+    '上禮拜': [addDays_(startOfWeek_(today), -7), addDays_(startOfWeek_(today), -1)],
     '本月': [monthStart, today],
     '這個月': [monthStart, today],
     '上月': lastMonth,

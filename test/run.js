@@ -382,6 +382,15 @@ test('規則辨識：查詢期間與分類', () => {
   assert.strictEqual(q('今年 交通'), '2026-01-01|2026-10-09|交通');
   assert.strictEqual(q('醫療'), '2026-10-01|2026-10-09|醫療');
   assert.strictEqual(q('花多少'), '2026-10-01|2026-10-09|全部');
+  assert.strictEqual(q('上週花多少'), '2026-09-28|2026-10-04|全部');
+  // 「我」「我們家」「總共」不能變成搜尋字，不然會查不到任何紀錄
+  const kw = (text) => env.context.parseWithRules_(text, '2026-10-09').query;
+  assert.strictEqual(q('我這個月花多少錢？'), '2026-10-01|2026-10-09|全部');
+  assert.strictEqual(kw('我這個月花多少錢？').keyword, '');
+  assert.strictEqual(q('我今天花多少錢？'), '2026-10-09|2026-10-09|全部');
+  assert.strictEqual(kw('我們家今天總共花多少').keyword, '');
+  assert.strictEqual(q('我上個月餐飲花多少'), '2026-09-01|2026-09-30|餐飲');
+  assert.strictEqual(kw('我全聯花多少').keyword, '全聯');
 });
 
 test('規則模式：記帳不呼叫任何 AI，照片只在私訊提示', () => {
