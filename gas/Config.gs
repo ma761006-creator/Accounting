@@ -3,7 +3,9 @@
  *
  * 金鑰不要寫在這裡，請放在「專案設定 → 指令碼屬性」：
  *   LINE_CHANNEL_ACCESS_TOKEN  LINE Messaging API 的 Channel access token
- *   ANTHROPIC_API_KEY          Claude API 金鑰
+ *   GEMINI_API_KEY             （選填）Gemini API 金鑰，設定後改用 AI 解析
+ *   ANTHROPIC_API_KEY          （選填）Claude API 金鑰，設定後改用 AI 解析
+ *   （兩個都沒設定時，使用免費的規則辨識，見 Rules.gs）
  *   SPREADSHEET_ID             （選填）帳本試算表 ID；若程式是從試算表「擴充功能」建立的可省略
  *   LINE_BOT_USER_ID           （選填）機器人的 userId（U 開頭），設定後只接受送給這個機器人的事件
  */

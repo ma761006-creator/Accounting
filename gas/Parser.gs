@@ -1,8 +1,9 @@
 /**
  * 用 AI 把一則訊息（文字或收據照片）解析成結構化資料。
  *
- * 使用哪個 AI 由指令碼屬性決定：
- *   AI_PROVIDER = 'gemini' 或 'claude'；沒設定時，有 GEMINI_API_KEY 就用 Gemini，否則用 Claude。
+ * 使用哪種解析方式由指令碼屬性決定：
+ *   AI_PROVIDER = 'rules'、'gemini' 或 'claude'。
+ *   沒設定時：有 GEMINI_API_KEY 用 Gemini，有 ANTHROPIC_API_KEY 用 Claude，都沒有就用免費的規則辨識（Rules.gs）。
  *
  * 回傳格式：
  *   {
@@ -17,14 +18,23 @@
  * @param {string} today  YYYY-MM-DD
  */
 function parseMessage(input, today) {
-  var provider = getProp_('AI_PROVIDER', false);
-  if (!provider) {
-    provider = getProp_('GEMINI_API_KEY', false) ? 'gemini' : 'claude';
-  }
+  var provider = getProvider_();
   if (provider === 'gemini') {
     return parseWithGemini(input, today);
   }
-  return parseWithClaude(input, today);
+  if (provider === 'claude') {
+    return parseWithClaude(input, today);
+  }
+  return parseWithRules(input.text, today);
+}
+
+/** @return {'rules'|'gemini'|'claude'} */
+function getProvider_() {
+  var provider = getProp_('AI_PROVIDER', false);
+  if (provider) return provider;
+  if (getProp_('GEMINI_API_KEY', false)) return 'gemini';
+  if (getProp_('ANTHROPIC_API_KEY', false)) return 'claude';
+  return 'rules';
 }
 
 // 以函式回傳而不是全域變數：Apps Script 依檔案順序載入，避免 CATEGORIES 尚未定義

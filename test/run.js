@@ -7,7 +7,7 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
-function createEnv(claudeReplies, extraProps) {
+function createEnv(claudeReplies, extraProps, sourceFiles) {
   const props = Object.assign({
     LINE_CHANNEL_ACCESS_TOKEN: 'line-token',
     ANTHROPIC_API_KEY: 'sk-test',
@@ -25,23 +25,25 @@ function createEnv(claudeReplies, extraProps) {
     if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return new (vm.runInContext('Date', context))(v + 'T00:00:00+08:00');
     return v === undefined ? '' : v;
   };
-  const sheet = {
-    getLastRow: () => rows.length,
-    appendRow: (r) => rows.push(r.map(toCell)),
+  const makeSheet = (data) => ({
+    data,
+    getLastRow: () => data.length,
+    appendRow: (r) => data.push(r.map(toCell)),
     setFrozenRows: () => {},
-    deleteRow: (n) => rows.splice(n - 1, 1),
+    deleteRow: (n) => data.splice(n - 1, 1),
     getRange: (row, col, numRows, numCols) => ({
-      getValues: () => rows.slice(row - 1, row - 1 + numRows).map((r) => {
+      getValues: () => data.slice(row - 1, row - 1 + numRows).map((r) => {
         const copy = r.slice(col - 1, col - 1 + numCols);
         while (copy.length < numCols) copy.push('');
         return copy;
       })
     })
-  };
-  let sheetCreated = false;
+  });
+  const sheets = {};
   const ss = {
-    getSheetByName: () => (sheetCreated ? sheet : null),
-    insertSheet: () => { sheetCreated = true; return sheet; }
+    getSheetByName: (name) => sheets[name] || null,
+    // 帳本工作表沿用 rows，方便測試檢查
+    insertSheet: (name) => (sheets[name] = makeSheet(name === '帳本' ? rows : []))
   };
 
   const response = (code, body, blob) => ({
@@ -123,8 +125,10 @@ function createEnv(claudeReplies, extraProps) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs'].forEach((f) => {
-    vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), context, { filename: f });
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs']
+    .map((f) => path.join(dir, f));
+  files.forEach((f) => {
+    vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
   });
 
   let eventSeq = 0;
@@ -140,7 +144,7 @@ function createEnv(claudeReplies, extraProps) {
     return event;
   };
 
-  return { context, rows, replies, claudeRequests, geminiRequests, post };
+  return { context, rows, sheets, replies, claudeRequests, geminiRequests, post };
 }
 
 const tests = [];
@@ -288,6 +292,103 @@ test('AI_PROVIDER=claude 時即使有 Gemini 金鑰也用 Claude', () => {
   env.post({ type: 'text', id: '1', text: '你好' });
   assert.strictEqual(env.claudeRequests.length, 1);
   assert.strictEqual(env.geminiRequests.length, 0);
+});
+
+const RULES = { ANTHROPIC_API_KEY: '' };
+
+test('規則辨識：記帳格式、日期、關鍵字分類', () => {
+  const env = createEnv([], RULES);
+  const parse = (text, today) => env.context.parseWithRules(text, today || '2026-10-09');
+  const one = (text, today) => {
+    const r = parse(text, today);
+    assert.strictEqual(r.intent, 'record', text);
+    assert.strictEqual(r.entries.length, 1, text);
+    const e = r.entries[0];
+    return [e.date, e.category, e.item, e.amount].join('|');
+  };
+  assert.strictEqual(one('午餐 120'), '2026-10-09|餐飲|午餐|120');
+  assert.strictEqual(one('午餐120元'), '2026-10-09|餐飲|午餐|120');
+  assert.strictEqual(one('全聯 560'), '2026-10-09|日用品|全聯|560');
+  assert.strictEqual(one('7-11 85'), '2026-10-09|餐飲|7-11|85');
+  assert.strictEqual(one('７－１１　８５'), '2026-10-09|餐飲|7-11|85');
+  assert.strictEqual(one('中油 1,200'), '2026-10-09|交通|中油|1200');
+  assert.strictEqual(one('昨天 加油 1200'), '2026-10-08|交通|加油|1200');
+  assert.strictEqual(one('昨天加油1200'), '2026-10-08|交通|加油|1200');
+  assert.strictEqual(one('10/8 全聯 560'), '2026-10-08|日用品|全聯|560');
+  assert.strictEqual(one('10月8日 全聯 560'), '2026-10-08|日用品|全聯|560');
+  assert.strictEqual(one('12/25 禮物 500'), '2025-12-25|其他|禮物|500');
+  assert.strictEqual(one('掛號 150 醫療'), '2026-10-09|醫療|掛號|150');
+  assert.strictEqual(one('醫療 口罩 99'), '2026-10-09|醫療|口罩|99');
+  assert.strictEqual(one('全聯 300 餐飲'), '2026-10-09|餐飲|全聯|300');
+  assert.strictEqual(one('ubereats 300'), '2026-10-09|餐飲|ubereats|300');
+  assert.strictEqual(one('Uber 250'), '2026-10-09|交通|Uber|250');
+
+  const multi = parse('加油 1200、停車 60');
+  assert.strictEqual(multi.intent, 'record');
+  assert.strictEqual(multi.entries.map((e) => e.amount).join(','), '1200,60');
+});
+
+test('規則辨識：聊天內容不會被誤記', () => {
+  const env = createEnv([], RULES);
+  ['我 3 點到', '晚上吃什麼', '午餐 120、明天見', '好', '收到！', '120'].forEach((text) => {
+    assert.strictEqual(env.context.parseWithRules(text, '2026-10-09').intent, 'other', text);
+  });
+});
+
+test('規則辨識：查詢期間與分類', () => {
+  const env = createEnv([], RULES);
+  const q = (text, today) => {
+    const r = env.context.parseWithRules(text, today || '2026-10-09');
+    assert.strictEqual(r.intent, 'query', text);
+    return [r.query.start_date, r.query.end_date, r.query.category].join('|');
+  };
+  assert.strictEqual(q('本月'), '2026-10-01|2026-10-09|全部');
+  assert.strictEqual(q('這個月花多少？'), '2026-10-01|2026-10-09|全部');
+  assert.strictEqual(q('本月 餐飲'), '2026-10-01|2026-10-09|餐飲');
+  assert.strictEqual(q('上個月餐飲多少'), '2026-09-01|2026-09-30|餐飲');
+  assert.strictEqual(q('上月', '2026-01-15'), '2025-12-01|2025-12-31|全部');
+  assert.strictEqual(q('本週'), '2026-10-05|2026-10-09|全部');
+  assert.strictEqual(q('本週', '2026-10-11'), '2026-10-05|2026-10-11|全部');
+  assert.strictEqual(q('今天'), '2026-10-09|2026-10-09|全部');
+  assert.strictEqual(q('今年 交通'), '2026-01-01|2026-10-09|交通');
+  assert.strictEqual(q('醫療'), '2026-10-01|2026-10-09|醫療');
+  assert.strictEqual(q('花多少'), '2026-10-01|2026-10-09|全部');
+});
+
+test('規則模式：記帳不呼叫任何 AI，照片只在私訊提示', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '中油 1200' });
+  assert.strictEqual(env.claudeRequests.length + env.geminiRequests.length, 0);
+  assert.strictEqual(env.rows[1][2], '交通');
+  assert.match(env.replies[0], /已記帳/);
+
+  env.post({ type: 'image', id: '2' });
+  assert.strictEqual(env.replies.length, 1); // 群組不回
+  env.post({ type: 'image', id: '3' }, { type: 'user', userId: 'Udad' });
+  assert.match(env.replies[1], /無法辨識收據照片/);
+
+  env.post({ type: 'text', id: '4', text: '說明' });
+  assert.match(env.replies[2], /品項 金額/);
+  assert.ok(!/收據/.test(env.replies[2]));
+});
+
+test('規則模式：試算表「關鍵字」工作表優先於內建關鍵字', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  assert.ok(env.sheets['關鍵字']);
+  env.sheets['關鍵字'].appendRow(['全聯', '餐飲']);
+  env.sheets['關鍵字'].appendRow(['寵物', '不存在的分類']);
+  env.post({ type: 'text', id: '1', text: '全聯 450' });
+  env.post({ type: 'text', id: '2', text: '寵物飼料 300' });
+  assert.deepStrictEqual(env.rows.slice(1).map((r) => r[2]), ['餐飲', '其他']);
+});
+
+test('dist/家庭記帳.gs 與 gas/ 一致，且單一檔案可以正常運作', () => {
+  const bundle = require('../scripts/bundle.js');
+  assert.strictEqual(fs.readFileSync(bundle.OUT, 'utf8'), bundle.build(), '請執行 node scripts/bundle.js');
+  const env = createEnv([], RULES, [bundle.OUT]);
+  env.post({ type: 'text', id: '1', text: '7-11 85' });
+  assert.strictEqual(env.rows[1][2], '餐飲');
 });
 
 let failed = 0;

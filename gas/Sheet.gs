@@ -2,12 +2,17 @@
  * Google 試算表讀寫。
  */
 
-function getLedgerSheet_() {
+function getSpreadsheet_() {
   var id = getProp_('SPREADSHEET_ID', false);
   var ss = id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) {
     throw new Error('找不到試算表，請設定指令碼屬性 SPREADSHEET_ID');
   }
+  return ss;
+}
+
+function getLedgerSheet_() {
+  var ss = getSpreadsheet_();
   var sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);

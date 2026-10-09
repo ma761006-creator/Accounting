@@ -6,6 +6,25 @@
 
 // 用函式而不是全域變數：Code.gs 會比 Config.gs 先載入，此時 CATEGORIES 還沒定義
 function helpText_() {
+  if (getProvider_() === 'rules') {
+    return [
+      '📒 家庭記帳機器人',
+      '',
+      '記帳：品項 金額，例如',
+      '・午餐 120',
+      '・昨天 全聯 560',
+      '・10/8 中油 1200',
+      '・掛號 150 醫療（最後加分類可指定分類）',
+      '・加油 1200、停車 60（多筆用「、」隔開）',
+      '',
+      '查詢：今天、本週、本月、上月、今年',
+      '・可加分類，例如「本月 餐飲」',
+      '',
+      '刪除：傳「刪除」會刪掉你最近一次記的帳',
+      '',
+      '分類：' + CATEGORIES.join('、')
+    ].join('\n');
+  }
   return [
     '📒 家庭記帳機器人',
     '',
@@ -78,6 +97,13 @@ function handleEvent_(event) {
     }
     input = { text: text };
   } else if (message.type === 'image') {
+    if (getProvider_() === 'rules') {
+      // 沒有 AI 無法讀收據；群組裡家人分享照片很常見，只在私訊提示
+      if (!isGroup) {
+        replyText(event.replyToken, '目前沒有開啟 AI，無法辨識收據照片。\n請用文字記帳，例如「全聯 560」。');
+      }
+      return;
+    }
     input = getImageContent(message.id);
   } else {
     return;
@@ -111,7 +137,8 @@ function handleEvent_(event) {
 
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
-    replyText(event.replyToken, '看不出要記帳還是查詢 🤔\n傳「說明」可以看使用方式。');
+    var hint = getProvider_() === 'rules' ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
+    replyText(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
 }
 
@@ -198,5 +225,6 @@ function withLock_(fn) {
 /** 在編輯器手動執行一次，用來建立帳本工作表並觸發授權。 */
 function setup() {
   getLedgerSheet_();
-  console.log('帳本工作表已就緒');
+  ensureKeywordSheet_();
+  console.log('帳本、關鍵字工作表已就緒');
 }
