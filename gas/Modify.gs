@@ -34,6 +34,9 @@ function parseModifyCommand_(text, today) {
     return target;
   }
 
+  // 提到固定支出的交給固定支出指令或 AI，不改帳本
+  if (/固定支出|訂閱/.test(t)) return null;
+
   // 「午餐改成150」「鯖魚改成 餐飲」
   var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);
   var edit = t.match(/^(修改|更正|更改|改成)\s*(.*)$/);
@@ -73,6 +76,9 @@ function parseModifyCommand_(text, today) {
     } else if (inline && !edit) {
       // 「計畫改成明天」這種聊天不是修改指令
       return null;
+    } else if (/\d/.test(change)) {
+      // 「修改 房租 9900元每月1號」這種看不懂的寫法，不要直接拿來當品項名稱
+      return { action: 'invalid', usage: modifyUsage_() };
     } else {
       cmd.newItem = change;
     }

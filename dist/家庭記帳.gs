@@ -902,10 +902,19 @@ function parseRecurringCommand_(text) {
     .replace(/每個月/g, '每月')
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
-  var m = t.match(/^(固定支出|訂閱)(.*)$/);
+  // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)(.*)$/);
   if (!m) return null;
   var rest = m[2].trim();
   if (!rest) return { action: 'list' };
+  // 「房租9900元每月1號」這種黏在一起的寫法，先拆成「房租 9900 每月 1號」
+  rest = rest
+    .replace(/每\s*(\d+)\s*個?月/g, ' 每$1個月 ')
+    .replace(/每月/g, ' 每月 ')
+    .replace(/(\d{1,2})\s*(號|日)/g, ' $1$2 ')
+    .replace(/(\d+)\s*(元|塊錢|塊)/g, ' $1 ')
+    .replace(/([^\d\s\-－每])(\d+)(?=\s|$)/g, '$1 $2')
+    .trim();
 
   var del = rest.match(/^(刪除|移除)\s*(.+)$/);
   if (del) return { action: 'delete', name: del[2].trim() };
@@ -1319,6 +1328,9 @@ function parseModifyCommand_(text, today) {
     return target;
   }
 
+  // 提到固定支出的交給固定支出指令或 AI，不改帳本
+  if (/固定支出|訂閱/.test(t)) return null;
+
   // 「午餐改成150」「鯖魚改成 餐飲」
   var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);
   var edit = t.match(/^(修改|更正|更改|改成)\s*(.*)$/);
@@ -1358,6 +1370,9 @@ function parseModifyCommand_(text, today) {
     } else if (inline && !edit) {
       // 「計畫改成明天」這種聊天不是修改指令
       return null;
+    } else if (/\d/.test(change)) {
+      // 「修改 房租 9900元每月1號」這種看不懂的寫法，不要直接拿來當品項名稱
+      return { action: 'invalid', usage: modifyUsage_() };
     } else {
       cmd.newItem = change;
     }
