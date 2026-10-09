@@ -94,8 +94,11 @@ function normalizeText_(text) {
 }
 
 /** 解析一筆「[日期] 品項 金額 [分類]」，不符合格式回傳 null。 */
+var UNSPECIFIED_ITEM = '未說明';
+
 function parseEntry_(segment, today, keywords) {
-  var s = segment;
+  // 「我今天花了120元」：去掉開頭的「我」，讓後面的日期能被認出來
+  var s = segment.replace(/^我\s*/, '');
 
   var date = today;
   var dateMatch = matchDatePrefix_(s, today);
@@ -118,6 +121,13 @@ function parseEntry_(segment, today, keywords) {
   if (!m) return null;
   var item = m[1].trim();
   var amount = Math.round(Number(m[2]));
+  // 「午餐花了120」→ 品項「午餐」；「花了120」沒說用途 → 品項「未說明」，回覆時請記帳的人補上
+  var spentWord = /(花了|花掉|用了|付了|買了|共花|總共)$/;
+  if (spentWord.test(item)) {
+    item = item.replace(spentWord, '').trim() || UNSPECIFIED_ITEM;
+  }
+  // 「買咖啡」→「咖啡」；只剩一個字時保留（「買菜」）
+  item = item.replace(/^(買了?|去|在)\s*(?=\S{2,})/, '');
   // 「本月 7-11」這類被數字切開的品項不算記帳
   if (!item || /[-~～]$/.test(item) || !(amount > 0)) return null;
 
@@ -169,6 +179,11 @@ function parseQuery_(t, today) {
   s = withoutSuffix;
   // 有「花多少」「明細」這類字眼，才確定是查詢
   var explicit = askedHowMuch || detail;
+  if (explicit) {
+    // 「我這個月花多少錢」「我們家今天總共花多少」：去掉主詞和「總共」，不然會被當成搜尋字
+    s = s.replace(/^(我們家|我們|我家|全家|家裡|大家|我)\s*/, '').replace(/\s*(總共|一共|全部|共)$/, '').trim();
+    if (s === '全部' || s === '總共') s = '';
+  }
 
   var category = '全部';
   var tokens = s.split(/\s+/).filter(function (p) {
@@ -199,6 +214,9 @@ function parseQuery_(t, today) {
     '昨天': [addDays_(today, -1), addDays_(today, -1)],
     '本週': [startOfWeek_(today), today],
     '這週': [startOfWeek_(today), today],
+    '這禮拜': [startOfWeek_(today), today],
+    '上週': [addDays_(startOfWeek_(today), -7), addDays_(startOfWeek_(today), -1)],
+    '上禮拜': [addDays_(startOfWeek_(today), -7), addDays_(startOfWeek_(today), -1)],
     '本月': [monthStart, today],
     '這個月': [monthStart, today],
     '上月': lastMonth,

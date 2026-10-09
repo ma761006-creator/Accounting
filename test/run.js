@@ -382,6 +382,18 @@ test('規則辨識：查詢期間與分類', () => {
   assert.strictEqual(q('今年 交通'), '2026-01-01|2026-10-09|交通');
   assert.strictEqual(q('醫療'), '2026-10-01|2026-10-09|醫療');
   assert.strictEqual(q('花多少'), '2026-10-01|2026-10-09|全部');
+  const rec = env.context.parseWithRules_('我今天買咖啡花了80元', '2026-10-09');
+  assert.strictEqual([rec.intent, rec.entries[0].item, rec.entries[0].category, rec.entries[0].amount].join('|'), 'record|咖啡|餐飲|80');
+  assert.strictEqual(env.context.parseWithRules_('買菜 300', '2026-10-09').entries[0].item, '買菜');
+  assert.strictEqual(q('上週花多少'), '2026-09-28|2026-10-04|全部');
+  // 「我」「我們家」「總共」不能變成搜尋字，不然會查不到任何紀錄
+  const kw = (text) => env.context.parseWithRules_(text, '2026-10-09').query;
+  assert.strictEqual(q('我這個月花多少錢？'), '2026-10-01|2026-10-09|全部');
+  assert.strictEqual(kw('我這個月花多少錢？').keyword, '');
+  assert.strictEqual(q('我今天花多少錢？'), '2026-10-09|2026-10-09|全部');
+  assert.strictEqual(kw('我們家今天總共花多少').keyword, '');
+  assert.strictEqual(q('我上個月餐飲花多少'), '2026-09-01|2026-09-30|餐飲');
+  assert.strictEqual(kw('我全聯花多少').keyword, '全聯');
 });
 
 test('規則模式：記帳不呼叫任何 AI，照片只在私訊提示', () => {
@@ -859,6 +871,28 @@ test('AI 修改意圖', () => {
   env.post({ type: 'text', id: '3', text: '把停車費那筆刪掉' });
   assert.strictEqual(env.rows.length, 1);
   assert.ok(env.geminiRequests[0].body.generationConfig.responseSchema.properties.intent.enum.includes('modify'));
+});
+
+test('沒說用途時記成「未說明」並提醒補上；「你是誰」會自我介紹', () => {
+  const env = createEnv([], RULES);
+  const one = (t) => {
+    const r = env.context.parseWithRules_(t, '2026-10-09');
+    return r.intent === 'record' ? r.entries.map((e) => [e.date, e.category, e.item, e.amount].join('|')).join(',') : r.intent;
+  };
+  assert.strictEqual(one('我今天花了120元'), '2026-10-09|其他|未說明|120');
+  assert.strictEqual(one('昨天花了 300'), '2026-10-08|其他|未說明|300');
+  assert.strictEqual(one('午餐花了120'), '2026-10-09|餐飲|午餐|120');
+  assert.strictEqual(one('我午餐 120'), '2026-10-09|餐飲|午餐|120');
+
+  env.post({ type: 'text', id: '1', text: '我今天花了120元' });
+  assert.match(env.replies[0], /👉 這筆用在哪裡？傳「修改 品項 午餐」補上/);
+  env.post({ type: 'text', id: '2', text: '修改 品項 午餐' });
+  assert.strictEqual(env.rows[1][3], '午餐');
+
+  env.post({ type: 'text', id: '3', text: '你是誰？' }, { type: 'user', userId: 'Udad' });
+  assert.match(env.replies[2], /我是家庭記帳機器人/);
+  env.post({ type: 'text', id: '4', text: '你會什麼' });
+  assert.match(env.replies[3], /傳「說明」看完整用法/);
 });
 
 let failed = 0;
