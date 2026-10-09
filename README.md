@@ -36,17 +36,21 @@
 
 ### 2. 建立 LINE 機器人
 
-1. 到 [LINE Developers](https://developers.line.biz/) 用 LINE 帳號登入。
-2. 建立 Provider，再建立 **Messaging API** channel（會同時建立一個 LINE 官方帳號）。
-3. 在 **Messaging API** 分頁：
-   - 最下方 **Channel access token** 按 Issue，複製權杖。
-   - 掃 QR code 把機器人加為好友。
-4. 到 [LINE Official Account Manager](https://manager.line.biz/) 的「設定 → 回應設定」：
+LINE 現在不能直接在 LINE Developers 建立 Messaging API channel，要**先建立官方帳號，再啟用 Messaging API**。
+
+1. **建立 LINE 官方帳號**：到 [LINE Official Account Manager](https://manager.line.biz/) 用 LINE 帳號登入，按「建立 LINE 官方帳號」填寫表單（名稱例如「家庭記帳」；業種隨意選，例如「個人」）。
+2. **啟用 Messaging API**：在官方帳號後台右上角 **設定 → Messaging API → 啟用 Messaging API**。
+   - 選擇或建立一個 **Provider**（例如「我的家」）。Provider 選定後**不能更改**。
+   - 隱私權政策、服務條款網址可以留空，按確定。
+3. **調整回應設定**：同一個後台的 **設定 → 回應設定**：
    - **聊天**：關閉
    - **自動回應訊息**：關閉
    - **Webhook**：開啟
-   - 「帳號設定」裡把 **允許加入群組**打開
-5. （選填）在 **Basic settings** 分頁最下方複製 **Your user ID**（U 開頭），第 3 步會用到。
+4. **允許加入群組**：**設定 → 帳號設定 → 功能切換**，把「加入群組或多人聊天室」改成允許。
+5. **取得權杖**：到 [LINE Developers](https://developers.line.biz/console/) 用同一個 LINE 帳號登入，點剛剛的 Provider，再點官方帳號對應的 channel：
+   - **Messaging API** 分頁最下方 **Channel access token (long-lived)** 按 **Issue**，複製權杖。
+   - 同一頁掃 QR code，把機器人加為好友。
+6. （選填）在 **Basic settings** 分頁最下方複製 **Your user ID**（U 開頭），第 3 步會用到。
 
 ### 3. 建立試算表和 Apps Script
 
