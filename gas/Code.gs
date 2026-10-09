@@ -23,6 +23,7 @@ function helpText_() {
     '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除重複',
     '',
     '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
+    '🏷️ 分類關鍵字：關鍵字 健身房 其他、關鍵字（看清單）',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
     '分類：' + CATEGORIES.join('、'),
@@ -173,6 +174,13 @@ function handleEvent_(event) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
+    var keywordCmd = parseKeywordCommand_(text);
+    if (keywordCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyKeywordCommand_(keywordCmd);
+      }));
+      return;
+    }
     var modifyCmd = parseModifyCommand_(text, today0);
     if (modifyCmd) {
       replyText_(event.replyToken, withLock_(function () {
@@ -204,6 +212,9 @@ function handleEvent_(event) {
 
   // 照片：同一張發票不會有兩筆一模一樣的帳，也不會另外多一筆「總計」
   if (message.type === 'image') parsed.entries = dedupeReceiptEntries_(parsed.entries);
+
+  // AI 判斷的分類以家人設定的關鍵字為準（規則辨識本來就會用）
+  if (getProvider_() !== 'rules' && !parsed.aiError) parsed.entries = applyCustomKeywords_(parsed.entries);
 
   if (parsed.intent === 'record' && parsed.entries.length > 0) {
     var recorder = getDisplayName_(event.source);

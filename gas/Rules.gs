@@ -290,7 +290,7 @@ function readCustomKeywords_() {
   if (!sheet || sheet.getLastRow() < 2) return [];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues()
     .filter(function (r) {
-      return String(r[0]).trim() && CATEGORIES.indexOf(String(r[1]).trim()) >= 0;
+      return String(r[0]).trim() && !/^（例）/.test(String(r[0]).trim()) && CATEGORIES.indexOf(String(r[1]).trim()) >= 0;
     })
     .map(function (r) {
       return { word: String(r[0]).trim().toLowerCase(), category: String(r[1]).trim() };
@@ -298,6 +298,101 @@ function readCustomKeywords_() {
 }
 
 /** 建立「關鍵字」工作表（setup 時呼叫）。 */
+/**
+ * 用 LINE 管理自訂關鍵字：
+ *   關鍵字                → 列出自訂關鍵字
+ *   關鍵字 健身房 其他      → 品項有「健身房」就歸到「其他」（已存在就更新）
+ *   健身房 歸類到 醫療      → 同上
+ *   關鍵字 刪除 健身房      → 刪除
+ * 不是關鍵字指令回傳 null。
+ */
+function parseKeywordCommand_(text) {
+  var t = normalizeText_(text).trim();
+  var catPattern = '(' + CATEGORIES.join('|') + ')';
+  var natural = t.match(new RegExp('^(.+?)\\s*(?:歸類到|歸類為|歸類|歸到|分類到|分類為|分到)\\s*' + catPattern + '$'));
+  // 「這筆歸類到交通」是要改某一筆帳，不是新增關鍵字
+  if (natural && !/^(這|那|剛剛|剛才|最近|上一|前一)/.test(natural[1])) {
+    return { action: 'upsert', word: natural[1].trim(), category: natural[2] };
+  }
+
+  var m = t.match(/^(?:關鍵字|關鍵詞)\s*(.*)$/);
+  if (!m) return null;
+  var rest = m[1].trim();
+  if (!rest || /^(清單|列表|查詢|有哪些)$/.test(rest)) return { action: 'list' };
+  var del = rest.match(/^(?:刪除|移除)\s*(.+)$/);
+  if (del) return { action: 'delete', word: del[1].trim() };
+  var add = rest.match(new RegExp('^(.+?)\\s*[=＝:：→]?\\s*' + catPattern + '$'));
+  if (add && add[1].trim()) return { action: 'upsert', word: add[1].trim(), category: add[2] };
+  return { action: 'invalid' };
+}
+
+function keywordUsage_() {
+  return [
+    '自訂分類關鍵字的用法：',
+    '・關鍵字 健身房 其他 → 品項有「健身房」就記成其他',
+    '・健身房 歸類到 醫療 → 同上，換成醫療',
+    '・關鍵字 刪除 健身房',
+    '・關鍵字 → 看目前的自訂關鍵字',
+    '',
+    '分類：' + CATEGORIES.join('、')
+  ].join('\n');
+}
+
+function applyKeywordCommand_(cmd) {
+  if (cmd.action === 'invalid') return keywordUsage_();
+  ensureKeywordSheet_();
+  var sheet = getSpreadsheet_().getSheetByName(KEYWORD_SHEET_NAME);
+  if (cmd.action === 'list') {
+    var list = readCustomKeywords_();
+    if (!list.length) return '目前沒有自訂關鍵字。\n\n' + keywordUsage_();
+    return '🏷️ 自訂關鍵字（優先於內建）\n' + list.map(function (k) {
+      return '・' + k.word + ' → ' + k.category;
+    }).join('\n') + '\n\n新增：關鍵字 健身房 其他｜刪除：關鍵字 刪除 健身房';
+  }
+
+  var target = cmd.word.toLowerCase();
+  var row = 0;
+  if (sheet.getLastRow() >= 2) {
+    var words = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < words.length; i++) {
+      if (String(words[i][0]).trim().toLowerCase() === target) {
+        row = i + 2;
+        break;
+      }
+    }
+  }
+  if (cmd.action === 'delete') {
+    if (!row) return '找不到關鍵字「' + cmd.word + '」。傳「關鍵字」可以看目前的清單。';
+    sheet.deleteRow(row);
+    return '🗑️ 已刪除關鍵字「' + cmd.word + '」';
+  }
+  if (row) {
+    sheet.getRange(row, 1, 1, 2).setValues([[cmd.word, cmd.category]]);
+  } else {
+    sheet.appendRow([cmd.word, cmd.category]);
+  }
+  return '🏷️ 已' + (row ? '更新' : '新增') + '關鍵字：' + cmd.word + ' → ' + cmd.category +
+    '\n之後品項有「' + cmd.word + '」就會記成' + cmd.category + '（AI 記帳也一樣）。\n已經記好的帳不會改，要改請傳「修改 ' + cmd.category + '」。';
+}
+
+/** AI 記帳後套用自訂關鍵字：家人設定的分類優先於 AI 的判斷。 */
+function applyCustomKeywords_(entries) {
+  var custom = readCustomKeywords_().sort(function (a, b) {
+    return b.word.length - a.word.length;
+  });
+  if (!custom.length) return entries;
+  entries.forEach(function (e) {
+    var text = (e.item + ' ' + (e.note || '')).toLowerCase();
+    for (var i = 0; i < custom.length; i++) {
+      if (text.indexOf(custom[i].word) >= 0) {
+        e.category = custom[i].category;
+        break;
+      }
+    }
+  });
+  return entries;
+}
+
 function ensureKeywordSheet_() {
   var ss = getSpreadsheet_();
   if (ss.getSheetByName(KEYWORD_SHEET_NAME)) return;

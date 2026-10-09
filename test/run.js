@@ -569,6 +569,36 @@ test('照片辨識：同一張發票重複的品項或總計不會記兩次', ()
   assert.strictEqual(dedupe([['午餐', 120], ['飲料', 60]]), '午餐120,飲料60');
 });
 
+test('用 LINE 管理分類關鍵字，AI 記帳也照關鍵字分類', () => {
+  const rec = { intent: 'record', entries: [{ date: '2026-10-09', category: '其他', item: '健身房月費', amount: 1500, note: '' }], query: noQuery };
+  const env = createEnv([rec]);
+  const p = (t) => env.context.parseKeywordCommand_(t);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p('關鍵字 健身房 醫療'))), { action: 'upsert', word: '健身房', category: '醫療' });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p('健身房 歸類到 醫療'))), { action: 'upsert', word: '健身房', category: '醫療' });
+  assert.strictEqual(p('關鍵字 刪除 健身房').action, 'delete');
+  assert.strictEqual(p('關鍵字').action, 'list');
+  assert.strictEqual(p('關鍵字 健身房 運動').action, 'invalid');
+  assert.strictEqual(p('這筆歸類到交通'), null);
+  assert.strictEqual(p('午餐 120'), null);
+
+  env.post({ type: 'text', id: '1', text: '關鍵字 健身房 醫療' });
+  assert.match(env.replies[0], /已新增關鍵字：健身房 → 醫療/);
+  env.post({ type: 'text', id: '2', text: '健身房 歸類到 其他' });
+  assert.match(env.replies[1], /已更新關鍵字：健身房 → 其他/);
+  env.post({ type: 'text', id: '3', text: '健身房 歸類到 醫療' });
+  env.post({ type: 'text', id: '4', text: '關鍵字' });
+  assert.match(env.replies[3], /健身房 → 醫療/);
+  assert.ok(!/（例）/.test(env.replies[3]));
+  assert.strictEqual(env.claudeRequests.length, 0); // 關鍵字指令不經過 AI
+
+  // AI 判斷成其他，但家人設定了關鍵字 → 記成醫療
+  env.post({ type: 'text', id: '5', text: '繳健身房月費 1500' });
+  assert.strictEqual(env.rows[env.rows.length - 1][2], '醫療');
+
+  env.post({ type: 'text', id: '6', text: '關鍵字 刪除 健身房' });
+  assert.match(env.replies[5], /已刪除關鍵字「健身房」/);
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
