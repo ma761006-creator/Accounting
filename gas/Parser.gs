@@ -102,7 +102,11 @@ function validateParsed_(parsed, today) {
 
   if (intent === 'record' && entries.length === 0) intent = 'other';
   if (intent === 'recurring' && recurring.action !== 'list' && !recurring.name) intent = 'other';
-  return { intent: intent, entries: entries, query: query, recurring: recurring };
+  var statedTotal = Math.round(Number(parsed.statedTotal));
+  return {
+    intent: intent, entries: entries, query: query, recurring: recurring,
+    statedTotal: statedTotal > 0 ? statedTotal : null
+  };
 }
 
 /**
@@ -202,6 +206,7 @@ function buildSystemPrompt_(today) {
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
     '  一則訊息可能有多筆，請逐筆列在 entries。金額一律為新台幣正整數。',
     '  沒提到日期就用今天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
+    '  「金額 1125」「合計 1125」「總共 1125」這類總計行不是另一筆消費，不要記成 entries。',
     '  收據照片：以實付總金額為準，一張收據通常記成一筆；若品項明顯分屬不同分類，可依分類拆成多筆，金額加總需等於實付金額。',
     '- query：訊息在問花費統計（例如「這個月花多少」「上個月交通費」）。',
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
