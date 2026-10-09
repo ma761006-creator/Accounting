@@ -325,3 +325,33 @@ function recurringUsage_() {
     '・固定支出 刪除 Netflix → 刪除'
   ].join('\n');
 }
+
+/** 「近期扣款」「最近要繳什麼」「這週要扣什麼」這類問句。 */
+function matchDueSoonQuestion_(text) {
+  var t = normalizeText_(text);
+  return /(近期|最近|即將|快要|這週|本週|下週|接下來).*(扣款|繳|付|扣)/.test(t) ||
+    /^(扣款|繳費)(提醒|清單|查詢)?$/.test(t);
+}
+
+/** 列出接下來 days 天內要扣款的固定支出。 */
+function formatDueSoon_(today, days) {
+  var limit = addDays_(today, days - 1);
+  var items = listRecurringItems_().filter(function (item) {
+    return item.next && item.next >= today && item.next <= limit;
+  }).sort(function (a, b) {
+    return a.next < b.next ? -1 : 1;
+  });
+  if (items.length === 0) {
+    return '⏰ 接下來 ' + days + ' 天沒有要扣款的固定支出。\n傳「固定支出」可以看全部項目。';
+  }
+  var total = 0;
+  var lines = items.map(function (item) {
+    var left = daysBetween_(today, item.next);
+    var when = left === 0 ? '今天' : left === 1 ? '明天' : left + ' 天後';
+    if (item.amount > 0) total += item.amount;
+    return '・' + (+item.next.slice(5, 7)) + '/' + (+item.next.slice(8)) + '（' + when + '）' + item.name + '｜' +
+      (item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定');
+  });
+  return '⏰ 接下來 ' + days + ' 天要扣款\n' + lines.join('\n') +
+    (total > 0 ? '\n\n已知金額合計 $' + formatMoney_(total) : '');
+}

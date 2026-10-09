@@ -154,7 +154,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs']
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Modify.gs']
     .map((f) => path.join(dir, f));
   files.forEach((f) => {
     vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
@@ -752,6 +752,113 @@ test('總計行（金額／合計）不重複記帳，並核對明細加總', ()
   // 單獨一行「金額 100」沒有其他明細時，仍當成一筆記帳
   env.post({ type: 'text', id: '3', text: '金額 100' });
   assert.strictEqual(env.rows.length - 1, 6);
+});
+
+test('修改：金額、分類、品項、指定品項、多筆時要求指定', () => {
+  const env = createEnv([], RULES);
+  const col = (i) => env.rows.slice(1).map((r) => r[i]).join(',');
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post({ type: 'text', id: '2', text: '修改 150' });
+  assert.strictEqual(col(4), '150');
+  assert.match(env.replies[1], /✏️ 已修改\n・原本：.*午餐 \$120\n・改成：.*午餐 \$150/);
+
+  env.post({ type: 'text', id: '3', text: '修改 交通' });
+  assert.strictEqual(col(2), '交通');
+  env.post({ type: 'text', id: '4', text: '修改 品項 早午餐' });
+  assert.strictEqual(col(3), '早午餐');
+
+  env.post({ type: 'text', id: '5', text: '鮭魚 275、鯖魚 190' });
+  env.post({ type: 'text', id: '6', text: '修改 200' });
+  assert.match(env.replies[5], /最近一次記了 2 筆，請指定/);
+  env.post({ type: 'text', id: '7', text: '鯖魚改成200' });
+  assert.strictEqual(col(4), '150,275,200');
+  env.post({ type: 'text', id: '8', text: '早午餐改成 餐飲' });
+  assert.strictEqual(col(2), '餐飲,餐飲,餐飲');
+
+  // 只能改自己的帳
+  env.post({ type: 'text', id: '9', text: '修改 鮭魚 999' }, { type: 'group', groupId: 'G1', userId: 'Umom' });
+  assert.match(env.replies[8], /找不到你記的「鮭魚」/);
+  assert.strictEqual(col(4), '150,275,200');
+
+  // 聊天不會被當成修改
+  const before = env.replies.length;
+  env.post({ type: 'text', id: '10', text: '計畫改成明天' });
+  assert.strictEqual(env.replies.length, before);
+  env.post({ type: 'text', id: '11', text: '修改' }, { type: 'user', userId: 'Udad' });
+  assert.match(env.replies[env.replies.length - 1], /修改的用法/);
+});
+
+test('刪除：指定品項、日期與金額，「取消」只能單獨使用', () => {
+  const env = createEnv([], RULES);
+  const items = () => env.rows.slice(1).map((r) => r[3]).join(',');
+  env.post({ type: 'text', id: '1', text: '昨天 停車 60' });
+  env.post({ type: 'text', id: '2', text: '停車 80' });
+  env.post({ type: 'text', id: '3', text: '午餐 120' });
+  env.post({ type: 'text', id: '4', text: '早餐 70' });
+
+  env.post({ type: 'text', id: '5', text: '刪除 午餐' });
+  assert.strictEqual(items(), '停車,停車,早餐');
+  env.post({ type: 'text', id: '6', text: '刪除 昨天 停車 60' });
+  assert.strictEqual(env.rows.slice(1).map((r) => r[4]).join(','), '80,70');
+  env.post({ type: 'text', id: '7', text: '取消聚餐' });
+  assert.strictEqual(items(), '停車,早餐');
+  env.post({ type: 'text', id: '8', text: '取消' });
+  assert.strictEqual(items(), '停車');
+  env.post({ type: 'text', id: '9', text: '刪除 晚餐' });
+  assert.match(env.replies[env.replies.length - 1], /找不到你記的「晚餐」/);
+
+  env.context.setup();
+  env.post({ type: 'text', id: '10', text: '刪除 房租' });
+  assert.match(env.replies[env.replies.length - 1], /固定支出 刪除 房租/);
+});
+
+test('近期扣款：列出 14 天內要繳的固定支出', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const D = (s) => new (vm.runInContext('Date', env.context))(s + 'T00:00:00+08:00');
+  const sheet = env.sheets['固定支出'];
+  sheet.data[1] = ['房租', 16000, '其他', 12, 1, D('2026-10-12'), '是'];
+  sheet.data[2] = ['電費', '', '其他', 9, 2, D('2026-10-09'), '是'];
+  sheet.data.push(['Netflix', 390, '其他', 30, 1, D('2026-10-30'), '是']);
+  const text = env.context.formatDueSoon_('2026-10-09', 14);
+  assert.match(text, /10\/9（今天）電費｜金額不固定\n・10\/12（3 天後）房租｜\$16,000/);
+  assert.ok(!/Netflix/.test(text));
+  assert.match(text, /已知金額合計 \$16,000/);
+  ['近期扣款', '最近要繳什麼', '這週要扣款的有哪些', '扣款提醒'].forEach((t) =>
+    assert.ok(env.context.matchDueSoonQuestion_(t), t));
+  assert.ok(!env.context.matchDueSoonQuestion_('午餐 120'));
+});
+
+test('洞察：查詢顯示最高單筆，分析顯示最高單筆與最高單日', () => {
+  const env = createEnv([], RULES);
+  const add = (date, item, amount) => env.context.appendEntries_([{ date, category: '餐飲', item, amount, note: '' }],
+    { recorder: '爸爸', userId: 'U', messageId: date + item, source: '文字' });
+  add('2026-10-02', '午餐', 120);
+  add('2026-10-02', '晚餐', 300);
+  add('2026-10-05', '聚餐', 380);
+  const a = env.context.formatAnalysis_(env.context.analyze_('2026-10-01', '2026-10-09', '2026-10-09'));
+  assert.match(a, /🏆 最高單筆：聚餐 \$380（10\/5，爸爸）/);
+  assert.match(a, /📆 最高單日：10\/2 \$420/);
+
+  const q = env.context.formatSummary_({ start_date: '2026-10-01', end_date: '2026-10-09', category: '全部', keyword: '', detail: false },
+    env.context.summarize_('2026-10-01', '2026-10-09', '全部', ''));
+  assert.match(q, /🏆 最高單筆：聚餐 \$380（10-05）/);
+});
+
+test('AI 修改意圖', () => {
+  const env = createEnv([
+    { intent: 'record', entries: [{ date: '2026-10-09', category: '交通', item: '停車', amount: 60, note: '' }], query: noQuery },
+    { intent: 'modify', entries: [], query: noQuery,
+      modify: { action: 'edit', keyword: '停車', date: '', amount: 0, new_amount: 80, new_category: '', new_item: '' } },
+    { intent: 'modify', entries: [], query: noQuery,
+      modify: { action: 'delete', keyword: '停車', date: '', amount: 0, new_amount: 0, new_category: '', new_item: '' } }
+  ], { GEMINI_API_KEY: 'gm' });
+  env.post({ type: 'text', id: '1', text: '停車 60' });
+  env.post({ type: 'text', id: '2', text: '剛剛的停車費其實是 80' });
+  assert.strictEqual(env.rows[1][4], 80);
+  env.post({ type: 'text', id: '3', text: '把停車費那筆刪掉' });
+  assert.strictEqual(env.rows.length, 1);
+  assert.ok(env.geminiRequests[0].body.generationConfig.responseSchema.properties.intent.enum.includes('modify'));
 });
 
 let failed = 0;

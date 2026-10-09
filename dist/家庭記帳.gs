@@ -896,6 +896,36 @@ function recurringUsage_() {
   ].join('\n');
 }
 
+/** 「近期扣款」「最近要繳什麼」「這週要扣什麼」這類問句。 */
+function matchDueSoonQuestion_(text) {
+  var t = normalizeText_(text);
+  return /(近期|最近|即將|快要|這週|本週|下週|接下來).*(扣款|繳|付|扣)/.test(t) ||
+    /^(扣款|繳費)(提醒|清單|查詢)?$/.test(t);
+}
+
+/** 列出接下來 days 天內要扣款的固定支出。 */
+function formatDueSoon_(today, days) {
+  var limit = addDays_(today, days - 1);
+  var items = listRecurringItems_().filter(function (item) {
+    return item.next && item.next >= today && item.next <= limit;
+  }).sort(function (a, b) {
+    return a.next < b.next ? -1 : 1;
+  });
+  if (items.length === 0) {
+    return '⏰ 接下來 ' + days + ' 天沒有要扣款的固定支出。\n傳「固定支出」可以看全部項目。';
+  }
+  var total = 0;
+  var lines = items.map(function (item) {
+    var left = daysBetween_(today, item.next);
+    var when = left === 0 ? '今天' : left === 1 ? '明天' : left + ' 天後';
+    if (item.amount > 0) total += item.amount;
+    return '・' + (+item.next.slice(5, 7)) + '/' + (+item.next.slice(8)) + '（' + when + '）' + item.name + '｜' +
+      (item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定');
+  });
+  return '⏰ 接下來 ' + days + ' 天要扣款\n' + lines.join('\n') +
+    (total > 0 ? '\n\n已知金額合計 $' + formatMoney_(total) : '');
+}
+
 // ===== Analysis.gs =====
 
 /**
@@ -937,7 +967,7 @@ function daysBetween_(a, b) {
 
 /** 統計一段期間，把固定支出和日常花費分開。 */
 function tally_(rows, start, end) {
-  var t = { total: 0, daily: 0, fixed: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {} };
+  var t = { total: 0, daily: 0, fixed: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
   rows.forEach(function (r) {
     var date = r[COL.date];
     if (date < start || date > end) return;
@@ -950,6 +980,8 @@ function tally_(rows, start, end) {
       return;
     }
     t.daily += amount;
+    t.byDate[date] = (t.byDate[date] || 0) + amount;
+    if (!t.maxRow || amount > Number(t.maxRow[COL.amount])) t.maxRow = r;
     t.byCategory[r[COL.category]] = (t.byCategory[r[COL.category]] || 0) + amount;
     t.byRecorder[r[COL.recorder]] = (t.byRecorder[r[COL.recorder]] || 0) + amount;
   });
@@ -1031,6 +1063,18 @@ function formatAnalysis_(a) {
     }).sort(function (x, y) {
       return y.d - x.d;
     })[0];
+    // 最高單筆、最高單日（只看日常花費）
+    if (cur.maxRow) {
+      lines.push('🏆 最高單筆：' + cur.maxRow[COL.item] + ' $' + formatMoney_(cur.maxRow[COL.amount]) +
+        '（' + md(String(cur.maxRow[COL.date])) + '，' + cur.maxRow[COL.recorder] + '）');
+    }
+    var days = Object.keys(cur.byDate);
+    if (days.length > 1) {
+      var topDay = days.sort(function (x, y) {
+        return cur.byDate[y] - cur.byDate[x];
+      })[0];
+      lines.push('📆 最高單日：' + md(topDay) + ' $' + formatMoney_(cur.byDate[topDay]));
+    }
     if (rising) {
       lines.push('📌 ' + rising.c + '比' + compareLabel + '多 $' + formatMoney_(rising.d) + '，是增加最多的項目');
     }
@@ -1088,6 +1132,228 @@ function parseAnalysis_(text, today) {
   return { start_date: q.start_date, end_date: q.end_date, category: '全部', keyword: '', detail: false };
 }
 
+// ===== Modify.gs =====
+
+/**
+ * 修改與刪除記帳。只能改、刪自己記的帳。
+ *
+ * 修改：
+ *   修改 150            → 最近一筆的金額改成 150
+ *   修改 交通            → 最近一筆的分類改成交通
+ *   修改 品項 早餐        → 最近一筆的品項改成早餐
+ *   修改 午餐 150        → 最近一筆「午餐」的金額改成 150
+ *   午餐改成150、鯖魚改成 餐飲
+ * 刪除：
+ *   刪除                → 最近一次記的帳（同一則訊息的多筆一起刪）
+ *   刪除 午餐            → 最近一筆「午餐」
+ *   刪除 昨天 停車 60     → 昨天、品項含「停車」、金額 60 的那筆
+ *
+ * 回傳的指令物件：
+ *   { action: 'edit', keyword, date, amount, newAmount, newCategory, newItem }
+ *   { action: 'delete', keyword, date, amount }
+ *   { action: 'invalid', usage }
+ */
+
+function parseModifyCommand_(text, today) {
+  var t = normalizeText_(text);
+
+  // 「取消」只能單獨使用；指定刪除哪筆要用「刪除」，避免「取消聚餐」這種聊天誤刪
+  if (t === '取消') return { action: 'delete', keyword: '', date: '', amount: null };
+  var del = t.match(/^刪除\s*(.*)$/);
+  if (del) {
+    var target = parseTarget_(del[1].trim(), today);
+    if (!target) return { action: 'invalid', usage: modifyUsage_() };
+    target.action = 'delete';
+    return target;
+  }
+
+  // 「午餐改成150」「鯖魚改成 餐飲」
+  var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);
+  var edit = t.match(/^(修改|更正|更改|改成)\s*(.*)$/);
+  if (!inline && !edit) return null;
+
+  var cmd = { action: 'edit', keyword: '', date: '', amount: null, newAmount: null, newCategory: '', newItem: '' };
+  var keywordPart;
+  var changePart;
+  if (inline && !edit) {
+    keywordPart = inline[1];
+    changePart = inline[2];
+  } else {
+    // 「修改 午餐 品項 早餐」「修改 150」「修改 午餐 金額 150」
+    var rest = edit[2].trim();
+    var itemMatch = rest.match(/^(.*?)\s*(?:品項|改名|名稱)\s*[:：]?\s*(.+)$/);
+    if (itemMatch) {
+      keywordPart = itemMatch[1];
+      cmd.newItem = itemMatch[2].trim();
+      changePart = '';
+    } else {
+      var tokens = rest.split(/\s+/).filter(function (x) {
+        return x;
+      });
+      var last = tokens.pop() || '';
+      keywordPart = tokens.join(' ');
+      changePart = last;
+    }
+  }
+
+  var change = String(changePart || '').replace(/^(金額|分類)\s*[:：]?\s*/, '').trim();
+  if (change) {
+    var num = change.match(/^(\d+(?:\.\d+)?)\s*(元|塊錢|塊)?$/);
+    if (num) {
+      cmd.newAmount = Math.round(Number(num[1]));
+    } else if (CATEGORIES.indexOf(change) >= 0) {
+      cmd.newCategory = change;
+    } else if (inline && !edit) {
+      // 「計畫改成明天」這種聊天不是修改指令
+      return null;
+    } else {
+      cmd.newItem = change;
+    }
+  }
+  if (!(cmd.newAmount > 0) && !cmd.newCategory && !cmd.newItem) {
+    return { action: 'invalid', usage: modifyUsage_() };
+  }
+
+  var target2 = parseTarget_(String(keywordPart || '').replace(/(金額|分類)$/, '').trim(), today);
+  if (!target2) return { action: 'invalid', usage: modifyUsage_() };
+  cmd.keyword = target2.keyword;
+  cmd.date = target2.date;
+  cmd.amount = target2.amount;
+  return cmd;
+}
+
+/** 「昨天 停車 60」→ { date, keyword, amount }，空字串代表「最近一筆」。 */
+function parseTarget_(s, today) {
+  var target = { keyword: '', date: '', amount: null };
+  s = s.replace(/^(剛剛|剛才|最近一筆|上一筆|那筆|的)\s*/, '').replace(/(那筆|的)$/, '').trim();
+  if (!s) return target;
+  var d = matchDatePrefix_(s, today);
+  if (d) {
+    target.date = d.date;
+    s = s.slice(d.length).trim();
+  }
+  var m = s.match(/^(.*?)\s*(\d+(?:\.\d+)?)\s*(元|塊錢|塊)?$/);
+  if (m && m[1].trim()) {
+    target.amount = Math.round(Number(m[2]));
+    s = m[1].trim();
+  }
+  target.keyword = s.replace(/^的|的$/g, '').trim();
+  return target;
+}
+
+/**
+ * 找出要修改或刪除的列。
+ * @return {{ rows: Array<{row: number, values: Array}>, ambiguous: boolean }}
+ *   沒有條件時回傳最近一則訊息的所有列；有條件時回傳最近一筆符合的列。
+ */
+function findTargetRows_(userId, target) {
+  var sheet = getLedgerSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { rows: [] };
+  var values = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+  var dateOf = function (v) {
+    return v instanceof Date ? Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd') : String(v);
+  };
+
+  var hasCriteria = target.keyword || target.date || target.amount;
+  for (var i = values.length - 1; i >= 0; i--) {
+    var r = values[i];
+    if (r[COL.userId] !== userId) continue;
+    if (!hasCriteria) {
+      var messageId = r[COL.messageId];
+      var group = [];
+      for (var j = i; j >= 0; j--) {
+        if (values[j][COL.userId] === userId && values[j][COL.messageId] === messageId) {
+          group.unshift({ row: j + 2, values: values[j] });
+        }
+      }
+      return { rows: group };
+    }
+    var text = (String(r[COL.item]) + ' ' + String(r[COL.note])).toLowerCase();
+    if (target.keyword && text.indexOf(target.keyword.toLowerCase()) < 0) continue;
+    if (target.date && dateOf(r[COL.date]) !== target.date) continue;
+    if (target.amount && Number(r[COL.amount]) !== target.amount) continue;
+    return { rows: [{ row: i + 2, values: r }] };
+  }
+  return { rows: [] };
+}
+
+function describeRow_(r) {
+  var d = r[COL.date] instanceof Date ? Utilities.formatDate(r[COL.date], TIMEZONE, 'yyyy-MM-dd') : String(r[COL.date]);
+  return d + ' ' + r[COL.category] + ' ' + r[COL.item] + ' $' + formatMoney_(r[COL.amount]);
+}
+
+function notFound_(target) {
+  if (!target.keyword && !target.date && !target.amount) return '找不到你可以修改或刪除的紀錄。';
+  var desc = [target.date, target.keyword, target.amount ? '$' + target.amount : ''].filter(function (x) {
+    return x;
+  }).join(' ');
+  return '找不到你記的「' + desc + '」。\n只能修改或刪除自己記的帳；其他人記的可以到試算表直接改。';
+}
+
+/** 執行修改或刪除，回傳回覆文字。 */
+function applyModifyCommand_(cmd, userId) {
+  if (cmd.action === 'invalid') return cmd.usage;
+  var found = findTargetRows_(userId, cmd);
+  if (found.rows.length === 0) {
+    var isRecurring = cmd.action === 'delete' && cmd.keyword && listRecurringItems_().some(function (item) {
+      return item.name.toLowerCase() === cmd.keyword.toLowerCase();
+    });
+    if (isRecurring) return '「' + cmd.keyword + '」是固定支出，要刪除請傳「固定支出 刪除 ' + cmd.keyword + '」。';
+    return notFound_(cmd);
+  }
+  var sheet = getLedgerSheet_();
+
+  if (cmd.action === 'delete') {
+    // 由下往上刪，列號才不會跑掉
+    for (var i = found.rows.length - 1; i >= 0; i--) {
+      sheet.deleteRow(found.rows[i].row);
+    }
+    return '🗑️ 已刪除：\n' + found.rows.map(function (x) {
+      return '・' + describeRow_(x.values);
+    }).join('\n');
+  }
+
+  if (found.rows.length > 1) {
+    return '你最近一次記了 ' + found.rows.length + ' 筆，請指定要改哪一筆，例如：\n' +
+      found.rows.map(function (x) {
+        return '・修改 ' + x.values[COL.item] + ' 150';
+      }).slice(0, 3).join('\n');
+  }
+
+  var target = found.rows[0];
+  var before = describeRow_(target.values);
+  var after = target.values.slice();
+  if (cmd.newAmount > 0) {
+    sheet.getRange(target.row, COL.amount + 1).setValue(cmd.newAmount);
+    after[COL.amount] = cmd.newAmount;
+  }
+  if (cmd.newCategory) {
+    sheet.getRange(target.row, COL.category + 1).setValue(cmd.newCategory);
+    after[COL.category] = cmd.newCategory;
+  }
+  if (cmd.newItem) {
+    sheet.getRange(target.row, COL.item + 1).setValue(cmd.newItem);
+    after[COL.item] = cmd.newItem;
+  }
+  return '✏️ 已修改\n・原本：' + before + '\n・改成：' + describeRow_(after);
+}
+
+function modifyUsage_() {
+  return [
+    '修改的用法（只能改自己記的帳）：',
+    '・修改 150 → 最近一筆的金額',
+    '・修改 交通 → 最近一筆的分類',
+    '・修改 品項 早餐 → 最近一筆的品項',
+    '・午餐改成150 → 最近一筆「午餐」',
+    '',
+    '刪除的用法：',
+    '・刪除 → 最近一次記的帳',
+    '・刪除 午餐 → 最近一筆「午餐」',
+    '・刪除 昨天 停車 60 → 指定日期、品項、金額'
+  ].join('\n');
+}
+
 // ===== Parser.gs =====
 
 /**
@@ -1099,10 +1365,11 @@ function parseAnalysis_(text, today) {
  *
  * 回傳格式：
  *   {
- *     intent: 'record' | 'query' | 'analysis' | 'recurring' | 'other',
+ *     intent: 'record' | 'query' | 'analysis' | 'recurring' | 'modify' | 'other',
  *     entries: [{ date, category, item, amount, note }],   // intent = record
  *     query: { start_date, end_date, category, keyword, detail }  // intent = query 或 analysis
  *     recurring: { action, name, amount, amountBlank, day, every, category }  // intent = recurring
+ *     modify: { action, keyword, date, amount, newAmount, newCategory, newItem }  // intent = modify
  *   }
  */
 
@@ -1140,7 +1407,7 @@ function parseMessage_(input, today) {
  */
 function validateParsed_(parsed, today) {
   parsed = parsed || {};
-  var intent = ['record', 'query', 'analysis', 'recurring', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
+  var intent = ['record', 'query', 'analysis', 'recurring', 'modify', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
   var isDate = function (s) {
     return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00Z'));
   };
@@ -1192,11 +1459,25 @@ function validateParsed_(parsed, today) {
     category: null
   };
 
+  var mo = parsed.modify || {};
+  var modify = {
+    action: mo.action === 'delete' ? 'delete' : 'edit',
+    keyword: String(mo.keyword || '').trim().slice(0, 50),
+    date: isDate(mo.date) ? mo.date : '',
+    amount: int(mo.amount, 1, 10000000),
+    newAmount: int(mo.new_amount, 1, 10000000),
+    newCategory: CATEGORIES.indexOf(mo.new_category) >= 0 ? mo.new_category : '',
+    newItem: String(mo.new_item || '').trim().slice(0, 100)
+  };
+  if (intent === 'modify' && modify.action === 'edit' && !modify.newAmount && !modify.newCategory && !modify.newItem) {
+    intent = 'other';
+  }
+
   if (intent === 'record' && entries.length === 0) intent = 'other';
   if (intent === 'recurring' && recurring.action !== 'list' && !recurring.name) intent = 'other';
   var statedTotal = Math.round(Number(parsed.statedTotal));
   return {
-    intent: intent, entries: entries, query: query, recurring: recurring,
+    intent: intent, entries: entries, query: query, recurring: recurring, modify: modify,
     statedTotal: statedTotal > 0 ? statedTotal : null
   };
 }
@@ -1236,7 +1517,7 @@ function getParseSchema_() {
   return {
     type: 'object',
     properties: {
-      intent: { type: 'string', enum: ['record', 'query', 'analysis', 'recurring', 'other'] },
+      intent: { type: 'string', enum: ['record', 'query', 'analysis', 'recurring', 'modify', 'other'] },
       entries: {
         type: 'array',
         items: {
@@ -1264,6 +1545,20 @@ function getParseSchema_() {
         required: ['action', 'name', 'amount', 'day', 'every'],
         additionalProperties: false
       },
+      modify: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['edit', 'delete'] },
+          keyword: { type: 'string', description: '要找的品項關鍵字；指最近一筆就空字串' },
+          date: { type: 'string', description: 'YYYY-MM-DD；沒指定日期就空字串' },
+          amount: { type: 'number', description: '原本的金額，用來找出那一筆；沒提到填 0' },
+          new_amount: { type: 'number', description: '改成的金額；不改填 0' },
+          new_category: { type: 'string', enum: [''].concat(CATEGORIES) },
+          new_item: { type: 'string', description: '改成的品項名稱；不改就空字串' }
+        },
+        required: ['action', 'keyword', 'date', 'amount', 'new_amount', 'new_category', 'new_item'],
+        additionalProperties: false
+      },
       query: {
         type: 'object',
         properties: {
@@ -1277,7 +1572,7 @@ function getParseSchema_() {
         additionalProperties: false
       }
     },
-    required: ['intent', 'entries', 'query', 'recurring'],
+    required: ['intent', 'entries', 'query', 'recurring', 'modify'],
     additionalProperties: false
   };
 }
@@ -1309,9 +1604,11 @@ function buildSystemPrompt_(today) {
     '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
     '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
     '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',
+    '- modify：修改或刪除已經記過的帳（例如「剛剛的午餐其實是150」「把昨天的停車費刪掉」「鯖魚那筆改成餐飲」）。',
+    '  action 為 edit 或 delete；keyword、date、amount 用來找出那一筆（指最近一筆就留空），new_* 填要改成的值，不改的留空或 0。',
     '- other：閒聊或與記帳無關的訊息。',
     '',
-    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0。'
+    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0；modify 填 edit、空字串與 0。'
   ].join('\n');
 }
 
@@ -1481,55 +1778,24 @@ function parseWithClaude_(input, today) {
 
 // 用函式而不是全域變數：Code.gs 會比 Config.gs 先載入，此時 CATEGORIES 還沒定義
 function helpText_() {
-  if (getProvider_() === 'rules') {
-    return [
-      '📒 家庭記帳機器人',
-      '',
-      '記帳：品項 金額，例如',
-      '・午餐 120',
-      '・昨天 全聯 560',
-      '・10/8 中油 1200',
-      '・掛號 150 醫療（最後加分類可指定分類）',
-      '・加油 1200、停車 60（多筆用「、」隔開）',
-      '',
-      '查詢：今天、本週、本月、上月、今年',
-      '・可加分類或店名：「本月 餐飲」「全聯花多少」',
-      '・加「明細」列出每一筆：「本月 明細」',
-      '',
-      '分析：「分析」「上月分析」「本週分析」',
-      '・平均每天花多少、最大支出、和上個月同期比較',
-      '',
-      '固定支出：傳「固定支出」查看房租、水電等',
-      '・新增或修改：固定支出 Netflix 390 每月15號',
-      '',
-      '刪除：傳「刪除」會刪掉你最近一次記的帳',
-      '',
-      '分類：' + CATEGORIES.join('、')
-    ].join('\n');
-  }
+  var ai = getProvider_() !== 'rules';
   return [
     '📒 家庭記帳機器人',
     '',
-    '記帳：直接傳訊息，例如',
-    '・午餐 120',
-    '・昨天全聯 560 衛生紙',
-    '・加油 1200、停車 60',
-    '・或直接拍收據 / 發票照片',
+    '💰 記帳：' + (ai ? '直接說，例如「昨天全聯買衛生紙 560」' : '品項 金額，例如「午餐 120」「昨天 中油 1200」'),
+    '・多筆：加油 1200、停車 60',
+    ai ? '📷 發票辨識：直接傳發票或收據照片' : '📷 發票辨識：設定 Gemini 金鑰後可以傳照片',
     '',
-    '查詢：例如',
-    '・這個月花多少？',
-    '・上個月餐飲多少',
-    '・這個月全聯花多少',
-    '・本月明細',
+    '🔎 查詢：本月、上月、本週、今天',
+    '・本月 餐飲、全聯花多少、本月 明細',
+    '📊 分析：分析、本週分析、上月分析',
+    '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
-    '分析：例如',
-    '・幫我分析這個月的消費',
-    '・上個月花得比較多嗎',
+    '✏️ 修改：修改 150、修改 交通、午餐改成150',
+    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除 昨天 停車 60',
     '',
-    '固定支出：傳「固定支出」查看房租、水電等',
-    '・新增：我每個月訂 Netflix 390，15 號扣款',
-    '',
-    '刪除：傳「刪除」會刪掉你最近一次記的帳',
+    '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
+    '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
     '分類：' + CATEGORIES.join('、')
   ].join('\n');
@@ -1607,13 +1873,20 @@ function handleEvent_(event) {
       }));
       return;
     }
+    if (matchDueSoonQuestion_(text)) {
+      replyText_(event.replyToken, formatDueSoon_(today0, 14));
+      return;
+    }
     var recurringName = matchRecurringQuestion_(text);
     if (recurringName !== null) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
-    if (text === '刪除' || text === '取消') {
-      replyText_(event.replyToken, handleDelete_(event.source.userId));
+    var modifyCmd = parseModifyCommand_(text, today0);
+    if (modifyCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyModifyCommand_(modifyCmd, event.source.userId);
+      }));
       return;
     }
     input = { text: text };
@@ -1659,6 +1932,13 @@ function handleEvent_(event) {
     return;
   }
 
+  if (parsed.intent === 'modify') {
+    replyText_(event.replyToken, withLock_(function () {
+      return applyModifyCommand_(parsed.modify, event.source.userId);
+    }));
+    return;
+  }
+
   if (parsed.intent === 'analysis') {
     replyText_(event.replyToken, formatAnalysis_(analyze_(parsed.query.start_date, parsed.query.end_date, today)));
     return;
@@ -1679,19 +1959,6 @@ function handleEvent_(event) {
     }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
-}
-
-function handleDelete_(userId) {
-  var deleted = withLock_(function () {
-    return deleteLastEntry_(userId);
-  });
-  if (deleted.length === 0) {
-    return '找不到你可以刪除的紀錄。';
-  }
-  var lines = deleted.map(function (r) {
-    return '・' + r[COL.date] + ' ' + r[COL.category] + ' ' + r[COL.item] + ' $' + formatMoney_(r[COL.amount]);
-  });
-  return '🗑️ 已刪除：\n' + lines.join('\n');
 }
 
 function formatRecorded_(entries, recorder, statedTotal) {
@@ -1726,6 +1993,12 @@ function formatSummary_(q, s) {
   }
 
   var lines = [title, '總計 $' + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  if (s.count > 1) {
+    var top = s.rows.reduce(function (a, r) {
+      return !a || Number(r[COL.amount]) > Number(a[COL.amount]) ? r : a;
+    }, null);
+    lines.push('🏆 最高單筆：' + top[COL.item] + ' $' + formatMoney_(top[COL.amount]) + '（' + String(top[COL.date]).slice(5) + '）');
+  }
 
   if (q.category === '全部' && Object.keys(s.byCategory).length > 1) {
     lines.push('', '依分類：');

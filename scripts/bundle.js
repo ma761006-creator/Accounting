@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ORDER = ['Config.gs', 'Sheet.gs', 'Line.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Parser.gs', 'Gemini.gs', 'Claude.gs', 'Code.gs'];
+const ORDER = ['Config.gs', 'Sheet.gs', 'Line.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Modify.gs', 'Parser.gs', 'Gemini.gs', 'Claude.gs', 'Code.gs'];
 const root = path.join(__dirname, '..');
 const OUT = path.join(root, 'dist', '家庭記帳.gs');
 const MANIFEST_SRC = path.join(root, 'gas', 'appsscript.json');
