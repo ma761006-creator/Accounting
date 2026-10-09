@@ -260,7 +260,9 @@ function formatSummary_(q, s) {
     });
   }
 
-  if (q.detail) {
+  // 筆數少就直接列出明細，不用另外打「明細」
+  var AUTO_DETAIL = 10;
+  if (q.detail || s.count <= AUTO_DETAIL) {
     var MAX_DETAIL = 40;
     lines.push('', '明細：');
     s.rows.slice(-MAX_DETAIL).forEach(function (r) {
@@ -269,7 +271,7 @@ function formatSummary_(q, s) {
     if (s.rows.length > MAX_DETAIL) {
       lines.push('（只列出最近 ' + MAX_DETAIL + ' 筆，共 ' + s.rows.length + ' 筆，完整明細請看試算表）');
     }
-  } else if (s.count > 1) {
+  } else {
     lines.push('', '想看每一筆？在查詢後面加「明細」。');
   }
   return lines.join('\n');
