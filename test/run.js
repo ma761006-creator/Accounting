@@ -14,6 +14,9 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     LINE_BOT_USER_ID: 'Ubot'
   }, extraProps);
   const geminiRequests = [];
+  const pushes = [];
+  const triggers = [];
+  const geminiStatuses = [];
   const replies = [];
   const claudeRequests = [];
   const cacheStore = new Map();
@@ -32,6 +35,10 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     setFrozenRows: () => {},
     deleteRow: (n) => data.splice(n - 1, 1),
     getRange: (row, col, numRows, numCols) => ({
+      setValue: (v) => {
+        while (data[row - 1].length < col) data[row - 1].push('');
+        data[row - 1][col - 1] = toCell(v);
+      },
       getValues: () => data.slice(row - 1, row - 1 + numRows).map((r) => {
         const copy = r.slice(col - 1, col - 1 + numCols);
         while (copy.length < numCols) copy.push('');
@@ -57,7 +64,8 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     JSON,
     PropertiesService: {
       getScriptProperties: () => ({
-        getProperty: (k) => props[k] || null
+        getProperty: (k) => props[k] || null,
+        setProperty: (k, v) => { props[k] = v; }
       })
     },
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss },
@@ -66,6 +74,16 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
         get: (k) => cacheStore.get(k) || null,
         put: (k, v) => cacheStore.set(k, v)
       })
+    },
+    ScriptApp: {
+      getProjectTriggers: () => triggers.map((name) => ({ getHandlerFunction: () => name })),
+      newTrigger: (name) => {
+        const chain = {
+          timeBased: () => chain, everyDays: () => chain, atHour: () => chain, inTimezone: () => chain,
+          create: () => triggers.push(name)
+        };
+        return chain;
+      }
     },
     LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
     ContentService: { createTextOutput: (t) => ({ text: t }) },
@@ -81,7 +99,8 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
           .replace('yyyy', parts.year).replace('MM', parts.month).replace('dd', parts.day)
           .replace('HH', parts.hour).replace('mm', parts.minute).replace('ss', parts.second);
       },
-      base64Encode: (bytes) => Buffer.from(bytes).toString('base64')
+      base64Encode: (bytes) => Buffer.from(bytes).toString('base64'),
+      sleep: () => {}
     },
     UrlFetchApp: {
       fetch: (url, opts) => {
@@ -96,6 +115,8 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
         }
         if (url.startsWith('https://generativelanguage.googleapis.com/')) {
           geminiRequests.push({ url, headers: opts.headers, body: JSON.parse(opts.payload) });
+          const status = geminiStatuses.shift();
+          if (status) return response(status, { error: { message: 'busy' } });
           const reply = claudeReplies.shift();
           return response(200, {
             candidates: [{
@@ -103,6 +124,10 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
               content: { parts: [{ text: 'thinking...', thought: true }, { text: JSON.stringify(reply) }] }
             }]
           });
+        }
+        if (url === 'https://api.line.me/v2/bot/message/push') {
+          pushes.push(JSON.parse(opts.payload));
+          return response(200, {});
         }
         if (url === 'https://api.line.me/v2/bot/message/reply') {
           replies.push(JSON.parse(opts.payload).messages[0].text);
@@ -125,7 +150,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs']
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs']
     .map((f) => path.join(dir, f));
   files.forEach((f) => {
     vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
@@ -144,7 +169,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     return event;
   };
 
-  return { context, rows, sheets, replies, claudeRequests, geminiRequests, post };
+  return { context, props, rows, sheets, replies, pushes, triggers, geminiStatuses, claudeRequests, geminiRequests, post };
 }
 
 const tests = [];
@@ -391,10 +416,137 @@ test('dist/家庭記帳.gs 與 gas/ 一致，且單一檔案可以正常運作',
   assert.strictEqual(env.rows[1][2], '餐飲');
 });
 
-test('執行選單只會出現 setup 和 doPost（其他函式都以 _ 結尾隱藏）', () => {
+test('執行選單只會出現 setup、doPost、dailyJob（其他函式都以 _ 結尾隱藏）', () => {
   const bundle = require('../scripts/bundle.js');
   const names = [...bundle.build().matchAll(/^function ([A-Za-z0-9_]+)\(/gm)].map((m) => m[1]);
-  assert.deepStrictEqual(names.filter((n) => !n.endsWith('_')).sort(), ['doPost', 'setup']);
+  assert.deepStrictEqual(names.filter((n) => !n.endsWith('_')).sort(), ['dailyJob', 'doPost', 'setup']);
+});
+
+test('規則辨識：關鍵字與明細查詢', () => {
+  const env = createEnv([], RULES);
+  const q = (text) => {
+    const r = env.context.parseWithRules_(text, '2026-10-09');
+    assert.strictEqual(r.intent, 'query', text);
+    return [r.query.start_date, r.query.end_date, r.query.category, r.query.keyword, r.query.detail].join('|');
+  };
+  assert.strictEqual(q('全聯花多少'), '2026-10-01|2026-10-09|全部|全聯|false');
+  assert.strictEqual(q('本月 全聯'), '2026-10-01|2026-10-09|全部|全聯|false');
+  assert.strictEqual(q('上個月全聯花多少'), '2026-09-01|2026-09-30|全部|全聯|false');
+  assert.strictEqual(q('7-11花多少'), '2026-10-01|2026-10-09|全部|7-11|false');
+  assert.strictEqual(q('7-11 明細'), '2026-10-01|2026-10-09|全部|7-11|true');
+  assert.strictEqual(q('本月明細'), '2026-10-01|2026-10-09|全部||true');
+  assert.strictEqual(q('上月 餐飲 明細'), '2026-09-01|2026-09-30|餐飲||true');
+  assert.strictEqual(q('本月'), '2026-10-01|2026-10-09|全部||false');
+  ['今天好熱', '本月 7-11', '全聯'].forEach((text) => {
+    assert.strictEqual(env.context.parseWithRules_(text, '2026-10-09').intent, 'other', text);
+  });
+  assert.strictEqual(env.context.parseWithRules_('昨天 加油 1200', '2026-10-09').intent, 'record');
+});
+
+test('查詢回覆：關鍵字篩選與明細', () => {
+  const env = createEnv([], RULES);
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  env.post({ type: 'text', id: '1', text: '全聯 560' });
+  env.post({ type: 'text', id: '2', text: '全聯 120 餐飲' }, { type: 'group', groupId: 'G1', userId: 'Umom' });
+  env.post({ type: 'text', id: '3', text: '中油 1000' });
+  env.post({ type: 'text', id: '4', text: '全聯 明細' });
+  const reply = env.replies[3];
+  assert.match(reply, /「全聯」/);
+  assert.match(reply, /總計 \$680（2 筆）/);
+  assert.match(reply, /明細：/);
+  assert.match(reply, new RegExp(today.slice(5) + ' 全聯 \\$560（爸爸）'));
+  assert.match(reply, /全聯 \$120（媽媽）/);
+  assert.ok(!/中油/.test(reply));
+});
+
+test('AI 回傳的資料會先驗證再寫入', () => {
+  const env = createEnv([{
+    intent: 'record',
+    entries: [
+      { date: '2099-01-01', category: '娛樂', item: '電影', amount: 300.4, note: '' },
+      { date: '2026-10-01', category: '餐飲', item: '午餐', amount: -5, note: '' },
+      { date: 'yesterday', category: '餐飲', item: '', amount: 100, note: '' }
+    ],
+    query: noQuery
+  }]);
+  env.post({ type: 'text', id: '1', text: '看電影 300' });
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  assert.strictEqual(env.rows.length, 2);
+  assert.strictEqual(env.rows[1][2], '其他'); // 不合法的分類
+  assert.strictEqual(env.rows[1][4], 300); // 金額取整數
+  assert.strictEqual(env.context.Utilities.formatDate(env.rows[1][1], 'Asia/Taipei', 'yyyy-MM-dd'), today); // 未來日期改成今天
+});
+
+test('Gemini 暫時錯誤（503）會自動重試一次', () => {
+  const env = createEnv([{ intent: 'record', entries: [{ date: '2026-10-09', category: '餐飲', item: '咖啡', amount: 80, note: '' }], query: noQuery }],
+    { GEMINI_API_KEY: 'gm' });
+  env.geminiStatuses.push(503);
+  env.post({ type: 'text', id: '1', text: '咖啡 80' });
+  assert.strictEqual(env.geminiRequests.length, 2);
+  assert.strictEqual(env.rows.length, 2);
+  assert.match(env.replies[0], /已記帳/);
+});
+
+test('固定支出：setup 建立工作表與每日排程，「固定支出」指令列出項目', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  env.context.setup(); // 重複執行不會重複建立
+  assert.deepStrictEqual(env.triggers, ['dailyJob']);
+  const sheet = env.sheets['固定支出'];
+  assert.deepStrictEqual(sheet.data.slice(1).map((r) => r[0]), ['房租', '水電']);
+  env.post({ type: 'text', id: '1', text: '固定支出' });
+  assert.match(env.replies[0], /房租｜金額不固定（只提醒）｜每月 5 號/);
+  assert.match(env.replies[0], /水電｜金額不固定（只提醒）｜每 2 個月 20 號/);
+});
+
+test('固定支出：到期自動記帳、前一天提醒、金額空白只提醒', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const sheet = env.sheets['固定支出'];
+  const D = (s) => new (vm.runInContext('Date', env.context))(s + 'T00:00:00+08:00');
+  sheet.data[1] = ['房租', 15000, '其他', 5, 1, D('2026-11-05'), '是'];
+  sheet.data[2] = ['水電', '', '其他', 31, 2, D('2026-11-30'), '是'];
+  sheet.data.push(['停用的', 100, '其他', 1, 1, D('2026-11-01'), '否']);
+
+  let msgs = env.context.processRecurring_('2026-11-04');
+  assert.strictEqual(msgs.join('\n'), '⏰ 提醒：明天（2026-11-05）要繳「房租」 $15,000');
+  assert.strictEqual(env.rows.length, 1); // 只有標題列
+
+  msgs = env.context.processRecurring_('2026-11-05');
+  assert.match(msgs.join('\n'), /已自動記帳：房租 \$15,000/);
+  const ledger = env.rows.slice(1);
+  assert.strictEqual(ledger.length, 1);
+  assert.strictEqual(ledger[0][3], '房租');
+  assert.strictEqual(ledger[0][5], '🔁 固定支出');
+  const fmt = (d) => env.context.Utilities.formatDate(d, 'Asia/Taipei', 'yyyy-MM-dd');
+  assert.strictEqual(fmt(sheet.data[1][5]), '2026-12-05');
+
+  // 同一天再跑一次不會重複記帳
+  env.context.processRecurring_('2026-11-05');
+  assert.strictEqual(env.rows.length - 1, 1);
+
+  msgs = env.context.processRecurring_('2026-11-30');
+  assert.match(msgs.join('\n'), /今天是「水電」繳費日，金額不固定/);
+  assert.strictEqual(env.rows.length - 1, 1);
+  assert.strictEqual(fmt(sheet.data[2][5]), '2027-01-31'); // 每 2 個月，31 號
+});
+
+test('固定支出：提醒推播到機器人加入的群組', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '說明' }, { type: 'group', groupId: 'Gfamily', userId: 'Udad' });
+  assert.strictEqual(env.props.NOTIFY_TARGET_ID, 'Gfamily');
+  const sheet = env.sheets['固定支出'];
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  sheet.data[1] = ['房租', 15000, '其他', +today.slice(8), 1, today, '是'];
+  sheet.data.length = 2;
+  env.context.dailyJob();
+  assert.strictEqual(env.pushes.length, 1);
+  assert.strictEqual(env.pushes[0].to, 'Gfamily');
+  assert.match(env.pushes[0].messages[0].text, /已自動記帳：房租/);
+
+  env.context.dailyJob(); // 沒有新事項就不推播
+  assert.strictEqual(env.pushes.length, 1);
 });
 
 let failed = 0;

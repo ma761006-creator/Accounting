@@ -44,7 +44,7 @@ function parseWithGemini_(input, today) {
   };
 
   var model = getProp_('GEMINI_MODEL', false) || GEMINI_DEFAULT_MODEL;
-  var res = UrlFetchApp.fetch(
+  var res = fetchWithRetry_(
     'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
     {
       method: 'post',

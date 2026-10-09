@@ -27,7 +27,7 @@ function parseWithClaude_(input, today) {
     messages: [{ role: 'user', content: content }]
   };
 
-  var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+  var res = fetchWithRetry_('https://api.anthropic.com/v1/messages', {
     method: 'post',
     contentType: 'application/json',
     headers: {

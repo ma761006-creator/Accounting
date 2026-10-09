@@ -66,20 +66,27 @@ function readRows_() {
 }
 
 /**
- * 統計區間內的花費。
- * @return {{ total: number, count: number, byCategory: Object, byRecorder: Object }}
+ * 統計區間內的花費。keyword 有值時只算品項或備註包含關鍵字的紀錄。
+ * @return {{ total: number, count: number, byCategory: Object, byRecorder: Object, rows: Array }}
+ *   rows 依日期排序，供列出明細
  */
-function summarize_(startDate, endDate, category) {
-  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {} };
+function summarize_(startDate, endDate, category, keyword) {
+  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, rows: [] };
+  var kw = String(keyword || '').toLowerCase();
   readRows_().forEach(function (r) {
     var date = r[COL.date];
     if (date < startDate || date > endDate) return;
     if (category !== '全部' && r[COL.category] !== category) return;
+    if (kw && (String(r[COL.item]) + ' ' + String(r[COL.note])).toLowerCase().indexOf(kw) < 0) return;
     var amount = Number(r[COL.amount]) || 0;
+    result.rows.push(r);
     result.total += amount;
     result.count += 1;
     result.byCategory[r[COL.category]] = (result.byCategory[r[COL.category]] || 0) + amount;
     result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+  });
+  result.rows.sort(function (a, b) {
+    return a[COL.date] < b[COL.date] ? -1 : a[COL.date] > b[COL.date] ? 1 : 0;
   });
   return result;
 }

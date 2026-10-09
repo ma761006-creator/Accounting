@@ -25,6 +25,18 @@ function replyText_(replyToken, text) {
   }
 }
 
+/** 主動推播（會用掉官方帳號每月的免費訊息則數，只用在每日提醒）。 */
+function pushText_(to, text) {
+  var res = lineFetch_('https://api.line.me/v2/bot/message/push', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ to: to, messages: [{ type: 'text', text: text.slice(0, 5000) }] })
+  });
+  if (res.getResponseCode() !== 200) {
+    console.error('LINE 推播失敗 ' + res.getResponseCode() + '：' + res.getContentText());
+  }
+}
+
 /** 取得使用者顯示名稱，快取 6 小時。 */
 function getDisplayName_(source) {
   var userId = source.userId;

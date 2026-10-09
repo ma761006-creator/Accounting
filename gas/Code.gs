@@ -18,7 +18,10 @@ function helpText_() {
       '・加油 1200、停車 60（多筆用「、」隔開）',
       '',
       '查詢：今天、本週、本月、上月、今年',
-      '・可加分類，例如「本月 餐飲」',
+      '・可加分類或店名：「本月 餐飲」「全聯花多少」',
+      '・加「明細」列出每一筆：「本月 明細」',
+      '',
+      '固定支出：傳「固定支出」查看房租、水電等',
       '',
       '刪除：傳「刪除」會刪掉你最近一次記的帳',
       '',
@@ -37,6 +40,10 @@ function helpText_() {
     '查詢：例如',
     '・這個月花多少？',
     '・上個月餐飲多少',
+    '・這個月全聯花多少',
+    '・本月明細',
+    '',
+    '固定支出：傳「固定支出」查看房租、水電等',
     '',
     '刪除：傳「刪除」會刪掉你最近一次記的帳',
     '',
@@ -75,6 +82,14 @@ function handleEvent_(event) {
   // LINE 重送的事件不重複記帳
   if (event.webhookEventId && isDuplicate_(event.webhookEventId)) return;
 
+  // 記住群組，固定支出的提醒會推播到這裡
+  if (event.source && event.source.type !== 'user') {
+    var groupId = event.source.groupId || event.source.roomId;
+    if (event.type === 'join' || !getProp_('NOTIFY_TARGET_ID', false)) {
+      PropertiesService.getScriptProperties().setProperty('NOTIFY_TARGET_ID', groupId);
+    }
+  }
+
   if (event.type === 'join' || event.type === 'follow') {
     replyText_(event.replyToken, helpText_());
     return;
@@ -89,6 +104,10 @@ function handleEvent_(event) {
     var text = message.text.trim();
     if (text === '說明' || text === '幫助' || text.toLowerCase() === 'help') {
       replyText_(event.replyToken, helpText_());
+      return;
+    }
+    if (text === '固定支出') {
+      replyText_(event.replyToken, formatRecurringList_());
       return;
     }
     if (text === '刪除' || text === '取消') {
@@ -131,7 +150,7 @@ function handleEvent_(event) {
 
   if (parsed.intent === 'query') {
     var q = parsed.query;
-    replyText_(event.replyToken, formatSummary_(q, summarize_(q.start_date, q.end_date, q.category)));
+    replyText_(event.replyToken, formatSummary_(q, summarize_(q.start_date, q.end_date, q.category, q.keyword)));
     return;
   }
 
@@ -172,7 +191,10 @@ function formatRecorded_(entries, recorder) {
 
 function formatSummary_(q, s) {
   var title = '📊 ' + q.start_date + ' ～ ' + q.end_date;
-  if (q.category !== '全部') title += '（' + q.category + '）';
+  var filters = [];
+  if (q.category !== '全部') filters.push(q.category);
+  if (q.keyword) filters.push('「' + q.keyword + '」');
+  if (filters.length) title += '（' + filters.join('・') + '）';
 
   if (s.count === 0) {
     return title + '\n這段期間沒有紀錄。';
@@ -180,7 +202,7 @@ function formatSummary_(q, s) {
 
   var lines = [title, '總計 $' + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
 
-  if (q.category === '全部') {
+  if (q.category === '全部' && Object.keys(s.byCategory).length > 1) {
     lines.push('', '依分類：');
     CATEGORIES.forEach(function (c) {
       if (s.byCategory[c]) {
@@ -196,6 +218,19 @@ function formatSummary_(q, s) {
     recorders.forEach(function (name) {
       lines.push('・' + name + ' $' + formatMoney_(s.byRecorder[name]));
     });
+  }
+
+  if (q.detail) {
+    var MAX_DETAIL = 40;
+    lines.push('', '明細：');
+    s.rows.slice(-MAX_DETAIL).forEach(function (r) {
+      lines.push('・' + String(r[COL.date]).slice(5) + ' ' + r[COL.item] + ' $' + formatMoney_(r[COL.amount]) + '（' + r[COL.recorder] + '）');
+    });
+    if (s.rows.length > MAX_DETAIL) {
+      lines.push('（只列出最近 ' + MAX_DETAIL + ' 筆，共 ' + s.rows.length + ' 筆，完整明細請看試算表）');
+    }
+  } else if (s.count > 1) {
+    lines.push('', '想看每一筆？在查詢後面加「明細」。');
   }
   return lines.join('\n');
 }
@@ -224,7 +259,10 @@ function withLock_(fn) {
 
 /** 在編輯器手動執行一次，用來建立帳本工作表並觸發授權。 */
 function setup() {
+  var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
   getLedgerSheet_();
   ensureKeywordSheet_();
-  console.log('帳本、關鍵字工作表已就緒');
+  ensureRecurringSheet_(today);
+  ensureDailyTrigger_();
+  console.log('帳本、關鍵字、固定支出工作表與每日排程已就緒');
 }

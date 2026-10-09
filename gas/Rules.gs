@@ -3,7 +3,7 @@
  *
  * 記帳格式：[日期] 品項 金額 [分類]，多筆用「、」「，」或換行隔開
  *   午餐 120 / 昨天 加油 1200 / 10/8 全聯 560 / 掛號 150 醫療 / 加油 1200、停車 60
- * 查詢格式：今天、本週、本月、上月、今年，可加分類，例如「本月 餐飲」
+ * 查詢格式：今天、本週、本月、上月、今年，可加分類或關鍵字（「本月 餐飲」「全聯花多少」），加「明細」列出每一筆
  *
  * 分類依關鍵字判斷，可在試算表的「關鍵字」工作表自行新增（優先於內建關鍵字）。
  */
@@ -63,7 +63,7 @@ function parseWithRules_(text, today) {
 }
 
 function emptyQuery_(today) {
-  return { start_date: today, end_date: today, category: '全部' };
+  return { start_date: today, end_date: today, category: '全部', keyword: '', detail: false };
 }
 
 /** 全形數字與符號轉半形、去掉千分位與貨幣符號。 */
@@ -106,7 +106,8 @@ function parseEntry_(segment, today, keywords) {
   if (!m) return null;
   var item = m[1].trim();
   var amount = Math.round(Number(m[2]));
-  if (!item || !(amount > 0)) return null;
+  // 「本月 7-11」這類被數字切開的品項不算記帳
+  if (!item || /[-~～]$/.test(item) || !(amount > 0)) return null;
 
   return {
     date: date,
@@ -142,28 +143,40 @@ function matchDatePrefix_(s, today) {
   return null;
 }
 
-/** 查詢：今天、昨天、本週、本月、上月、今年、查詢，可加分類，例如「本月 餐飲」「餐飲花多少」。 */
+/**
+ * 查詢：今天、昨天、本週、本月、上月、今年、查詢，可加分類或關鍵字，加「明細」會列出每一筆。
+ *   本月 / 本月 餐飲 / 上個月餐飲多少 / 全聯花多少 / 本月 全聯 / 本月 明細 / 7-11 明細
+ */
 function parseQuery_(t, today) {
   var plain = t.replace(/[?？!！。]/g, '').trim();
-  var s = plain.replace(/(花了?多少錢?|多少錢?|花費|統計|支出)$/, '').trim();
-  var askedHowMuch = s !== plain;
-  if (/\d/.test(s)) return null;
+  if (!plain) return null;
+  var detail = /明細|清單/.test(plain);
+  var s = plain.replace(/明細|清單/g, ' ').trim();
+  var withoutSuffix = s.replace(/(花了?多少錢?|多少錢?|花費|統計|支出)$/, '').trim();
+  var askedHowMuch = withoutSuffix !== s;
+  s = withoutSuffix;
+  // 有「花多少」「明細」這類字眼，才確定是查詢
+  var explicit = askedHowMuch || detail;
 
   var category = '全部';
-  var rest = s.split(/\s+/).filter(function (p) {
+  var tokens = s.split(/\s+/).filter(function (p) {
+    if (!p) return false;
     if (CATEGORIES.indexOf(p) >= 0) {
       category = p;
       return false;
     }
     return true;
-  }).join('');
-  // 也接受「本月餐飲」這種沒有空白的寫法
-  CATEGORIES.forEach(function (c) {
-    if (category === '全部' && rest.length > c.length && rest.slice(-c.length) === c) {
-      category = c;
-      rest = rest.slice(0, -c.length);
-    }
   });
+  // 也接受「上個月餐飲」這種沒有空白的寫法
+  if (category === '全部' && tokens.length) {
+    var last = tokens[tokens.length - 1];
+    CATEGORIES.forEach(function (c) {
+      if (category === '全部' && last.length > c.length && last.slice(-c.length) === c) {
+        category = c;
+        tokens[tokens.length - 1] = last.slice(0, -c.length);
+      }
+    });
+  }
 
   var y = +today.slice(0, 4);
   var mo = +today.slice(5, 7);
@@ -181,17 +194,41 @@ function parseQuery_(t, today) {
     '今年': [ymd_(y, 1, 1), today],
     '查詢': [monthStart, today]
   };
+  var periodWords = Object.keys(periods).sort(function (a, b) {
+    return b.length - a.length;
+  });
 
-  var range;
-  if (periods.hasOwnProperty(rest)) {
-    range = periods[rest];
-  } else if (rest === '' && (askedHowMuch || category !== '全部')) {
-    // 「花多少」「餐飲」「醫療花多少」：預設查本月
+  var range = null;
+  var keyword = '';
+  if (tokens.length && periods.hasOwnProperty(tokens[0])) {
+    // 「本月」「本月 全聯」
+    range = periods[tokens[0]];
+    keyword = tokens.slice(1).join(' ');
+  } else if (explicit) {
+    // 「這個月花多少」「全聯花多少」「7-11 明細」
+    var joined = tokens.join(' ');
+    for (var i = 0; i < periodWords.length; i++) {
+      if (joined.indexOf(periodWords[i]) === 0) {
+        range = periods[periodWords[i]];
+        keyword = joined.slice(periodWords[i].length).trim();
+        break;
+      }
+    }
+    if (!range) {
+      range = [monthStart, today];
+      keyword = joined;
+    }
+  } else if (tokens.length === 0 && category !== '全部') {
+    // 只傳分類名稱「醫療」
     range = [monthStart, today];
   } else {
     return null;
   }
-  return { start_date: range[0], end_date: range[1], category: category };
+
+  // 「昨天 加油 1200」是記帳不是查詢
+  if (!explicit && /\d+(\.\d+)?\s*(元|塊錢|塊)?$/.test(keyword)) return null;
+
+  return { start_date: range[0], end_date: range[1], category: category, keyword: keyword, detail: detail };
 }
 
 function guessCategory_(item, keywords) {
