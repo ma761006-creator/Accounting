@@ -632,7 +632,7 @@ test('AI 回傳的資料會先驗證再寫入', () => {
   const env = createEnv([{
     intent: 'record',
     entries: [
-      { date: '2099-01-01', category: '娛樂', item: '電影', amount: 300.4, note: '' },
+      { date: '2099-01-01', category: '休閒', item: '電影', amount: 300.4, note: '' },
       { date: '2026-10-01', category: '餐飲', item: '午餐', amount: -5, note: '' },
       { date: 'yesterday', category: '餐飲', item: '', amount: 100, note: '' }
     ],
