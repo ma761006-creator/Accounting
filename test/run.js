@@ -599,7 +599,7 @@ test('用 LINE 管理分類關鍵字，AI 記帳也照關鍵字分類', () => {
   assert.match(env.replies[5], /已刪除關鍵字「健身房」/);
 });
 
-test('育兒分類：內建關鍵字與指定分類', () => {
+test('育兒、旅遊、娛樂分類：內建關鍵字與指定分類', () => {
   const env = createEnv([], RULES);
   const cat = (t) => env.context.parseWithRules_(t, '2026-10-09').entries.map((e) => e.category).join(',');
   assert.strictEqual(cat('尿布 899'), '育兒');
@@ -608,6 +608,12 @@ test('育兒分類：內建關鍵字與指定分類', () => {
   assert.strictEqual(cat('牛奶 90'), '餐飲');
   assert.strictEqual(cat('游泳課 1500 育兒'), '育兒');
   assert.strictEqual(env.context.parseKeywordCommand_('關鍵字 游泳課 育兒').category, '育兒');
+  assert.strictEqual(cat('機票 12000'), '旅遊');
+  assert.strictEqual(cat('民宿 3200'), '旅遊');
+  assert.strictEqual(cat('電影 600'), '娛樂');
+  assert.strictEqual(cat('健身房 1500'), '娛樂');
+  assert.strictEqual(cat('高鐵 1490'), '交通');
+  assert.strictEqual(cat('KTV 900'), '娛樂');
 });
 
 test('查詢回覆：10 筆以內直接列出明細', () => {
