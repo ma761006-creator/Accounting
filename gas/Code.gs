@@ -178,6 +178,14 @@ function handleEvent_(event) {
     return;
   }
 
+  // 「你是誰」「你會什麼」：簡短自我介紹
+  if (message.type === 'text' && /你是誰|你叫什麼|你會什麼|你可以做什麼|你能做什麼|自我介紹/.test(message.text)) {
+    replyText_(event.replyToken, '我是家庭記帳機器人 📒\n' +
+      '幫全家記帳、查詢與分析花費，也會管理房租、水電這類固定支出，扣款前一天提醒。\n\n' +
+      '試試傳「午餐 120」，或傳「說明」看完整用法。');
+    return;
+  }
+
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
     var hint = getProvider_() === 'rules' || parsed.aiError ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
@@ -205,6 +213,12 @@ function formatRecorded_(entries, recorder, statedTotal) {
     text += statedTotal === total
       ? '（和你寫的總計相符）'
       : '\n⚠️ 你寫的總計是 $' + formatMoney_(statedTotal) + '，和明細加總 $' + formatMoney_(total) + ' 不同，請確認';
+  }
+  var unspecified = entries.some(function (e) {
+    return e.item === UNSPECIFIED_ITEM;
+  });
+  if (unspecified) {
+    return text + '\n\n👉 這筆用在哪裡？傳「修改 品項 午餐」補上，或「修改 餐飲」改分類。';
   }
   return text + '\n\n記錯了？傳「刪除」即可撤銷。';
 }

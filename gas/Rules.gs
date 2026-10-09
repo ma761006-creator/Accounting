@@ -94,8 +94,11 @@ function normalizeText_(text) {
 }
 
 /** 解析一筆「[日期] 品項 金額 [分類]」，不符合格式回傳 null。 */
+var UNSPECIFIED_ITEM = '未說明';
+
 function parseEntry_(segment, today, keywords) {
-  var s = segment;
+  // 「我今天花了120元」：去掉開頭的「我」，讓後面的日期能被認出來
+  var s = segment.replace(/^我\s*/, '');
 
   var date = today;
   var dateMatch = matchDatePrefix_(s, today);
@@ -118,6 +121,11 @@ function parseEntry_(segment, today, keywords) {
   if (!m) return null;
   var item = m[1].trim();
   var amount = Math.round(Number(m[2]));
+  // 「午餐花了120」→ 品項「午餐」；「花了120」沒說用途 → 品項「未說明」，回覆時請記帳的人補上
+  var spentWord = /(花了|花掉|用了|付了|買了|共花|總共)$/;
+  if (spentWord.test(item)) {
+    item = item.replace(spentWord, '').trim() || UNSPECIFIED_ITEM;
+  }
   // 「本月 7-11」這類被數字切開的品項不算記帳
   if (!item || /[-~～]$/.test(item) || !(amount > 0)) return null;
 

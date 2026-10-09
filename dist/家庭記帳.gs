@@ -354,8 +354,11 @@ function normalizeText_(text) {
 }
 
 /** 解析一筆「[日期] 品項 金額 [分類]」，不符合格式回傳 null。 */
+var UNSPECIFIED_ITEM = '未說明';
+
 function parseEntry_(segment, today, keywords) {
-  var s = segment;
+  // 「我今天花了120元」：去掉開頭的「我」，讓後面的日期能被認出來
+  var s = segment.replace(/^我\s*/, '');
 
   var date = today;
   var dateMatch = matchDatePrefix_(s, today);
@@ -378,6 +381,11 @@ function parseEntry_(segment, today, keywords) {
   if (!m) return null;
   var item = m[1].trim();
   var amount = Math.round(Number(m[2]));
+  // 「午餐花了120」→ 品項「午餐」；「花了120」沒說用途 → 品項「未說明」，回覆時請記帳的人補上
+  var spentWord = /(花了|花掉|用了|付了|買了|共花|總共)$/;
+  if (spentWord.test(item)) {
+    item = item.replace(spentWord, '').trim() || UNSPECIFIED_ITEM;
+  }
   // 「本月 7-11」這類被數字切開的品項不算記帳
   if (!item || /[-~～]$/.test(item) || !(amount > 0)) return null;
 
@@ -1593,6 +1601,7 @@ function buildSystemPrompt_(today) {
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
     '  一則訊息可能有多筆，請逐筆列在 entries。金額一律為新台幣正整數。',
     '  沒提到日期就用今天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
+    '  訊息沒說用在哪裡（例如「我今天花了120元」）時不要猜，item 填「未說明」、category 填「其他」。',
     '  「金額 1125」「合計 1125」「總共 1125」這類總計行不是另一筆消費，不要記成 entries。',
     '  收據照片：以實付總金額為準，一張收據通常記成一筆；若品項明顯分屬不同分類，可依分類拆成多筆，金額加總需等於實付金額。',
     '- query：訊息在問花費統計（例如「這個月花多少」「上個月交通費」）。',
@@ -1950,6 +1959,14 @@ function handleEvent_(event) {
     return;
   }
 
+  // 「你是誰」「你會什麼」：簡短自我介紹
+  if (message.type === 'text' && /你是誰|你叫什麼|你會什麼|你可以做什麼|你能做什麼|自我介紹/.test(message.text)) {
+    replyText_(event.replyToken, '我是家庭記帳機器人 📒\n' +
+      '幫全家記帳、查詢與分析花費，也會管理房租、水電這類固定支出，扣款前一天提醒。\n\n' +
+      '試試傳「午餐 120」，或傳「說明」看完整用法。');
+    return;
+  }
+
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
     var hint = getProvider_() === 'rules' || parsed.aiError ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
@@ -1977,6 +1994,12 @@ function formatRecorded_(entries, recorder, statedTotal) {
     text += statedTotal === total
       ? '（和你寫的總計相符）'
       : '\n⚠️ 你寫的總計是 $' + formatMoney_(statedTotal) + '，和明細加總 $' + formatMoney_(total) + ' 不同，請確認';
+  }
+  var unspecified = entries.some(function (e) {
+    return e.item === UNSPECIFIED_ITEM;
+  });
+  if (unspecified) {
+    return text + '\n\n👉 這筆用在哪裡？傳「修改 品項 午餐」補上，或「修改 餐飲」改分類。';
   }
   return text + '\n\n記錯了？傳「刪除」即可撤銷。';
 }

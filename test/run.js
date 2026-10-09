@@ -861,6 +861,28 @@ test('AI 修改意圖', () => {
   assert.ok(env.geminiRequests[0].body.generationConfig.responseSchema.properties.intent.enum.includes('modify'));
 });
 
+test('沒說用途時記成「未說明」並提醒補上；「你是誰」會自我介紹', () => {
+  const env = createEnv([], RULES);
+  const one = (t) => {
+    const r = env.context.parseWithRules_(t, '2026-10-09');
+    return r.intent === 'record' ? r.entries.map((e) => [e.date, e.category, e.item, e.amount].join('|')).join(',') : r.intent;
+  };
+  assert.strictEqual(one('我今天花了120元'), '2026-10-09|其他|未說明|120');
+  assert.strictEqual(one('昨天花了 300'), '2026-10-08|其他|未說明|300');
+  assert.strictEqual(one('午餐花了120'), '2026-10-09|餐飲|午餐|120');
+  assert.strictEqual(one('我午餐 120'), '2026-10-09|餐飲|午餐|120');
+
+  env.post({ type: 'text', id: '1', text: '我今天花了120元' });
+  assert.match(env.replies[0], /👉 這筆用在哪裡？傳「修改 品項 午餐」補上/);
+  env.post({ type: 'text', id: '2', text: '修改 品項 午餐' });
+  assert.strictEqual(env.rows[1][3], '午餐');
+
+  env.post({ type: 'text', id: '3', text: '你是誰？' }, { type: 'user', userId: 'Udad' });
+  assert.match(env.replies[2], /我是家庭記帳機器人/);
+  env.post({ type: 'text', id: '4', text: '你會什麼' });
+  assert.match(env.replies[3], /傳「說明」看完整用法/);
+});
+
 let failed = 0;
 for (const t of tests) {
   try {
