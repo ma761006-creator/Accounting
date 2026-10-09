@@ -23,6 +23,8 @@ function parseMessage_(input, today) {
   var provider = getProvider_();
   var parsed;
   var aiError = '';
+  // 按鈕和固定指令（本月、本週分析、本月 明細…）不需要 AI：省額度，AI 忙線時也照常運作
+  if (input.text && isFixedCommand_(input.text)) provider = 'rules';
   try {
     if (provider === 'gemini') {
       parsed = parseWithGemini_(input, today);
@@ -41,6 +43,13 @@ function parseMessage_(input, today) {
   var result = validateParsed_(parsed, today);
   result.aiError = aiError;
   return result;
+}
+
+function isFixedCommand_(text) {
+  var t = normalizeText_(text).replace(/\s+/g, ' ');
+  var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年)';
+  return new RegExp('^' + period + '( ?明細)?$').test(t) ||
+    new RegExp('^' + period + '? ?分析$').test(t);
 }
 
 /**

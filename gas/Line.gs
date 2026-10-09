@@ -10,15 +10,25 @@ function lineFetch_(url, options) {
   return UrlFetchApp.fetch(url, options);
 }
 
-function replyText_(replyToken, text) {
+/**
+ * @param {Array<{label: string, text: string}>=} quickItems
+ *   選填的快速選單按鈕：顯示在輸入框上方，點了就會送出 text，和自己打字一樣。
+ */
+function replyText_(replyToken, text, quickItems) {
+  // LINE 單則文字上限 5000 字
+  var message = { type: 'text', text: text.slice(0, 5000) };
+  if (quickItems && quickItems.length) {
+    // LINE 限制：最多 13 個按鈕，每個標籤最多 20 字
+    message.quickReply = {
+      items: quickItems.slice(0, 13).map(function (q) {
+        return { type: 'action', action: { type: 'message', label: q.label.slice(0, 20), text: q.text } };
+      })
+    };
+  }
   var res = lineFetch_('https://api.line.me/v2/bot/message/reply', {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({
-      replyToken: replyToken,
-      // LINE 單則文字上限 5000 字
-      messages: [{ type: 'text', text: text.slice(0, 5000) }]
-    })
+    payload: JSON.stringify({ replyToken: replyToken, messages: [message] })
   });
   if (res.getResponseCode() !== 200) {
     console.error('LINE 回覆失敗 ' + res.getResponseCode() + '：' + res.getContentText());
@@ -66,12 +76,17 @@ function getDisplayName_(source) {
 }
 
 /** 下載使用者傳來的圖片，回傳 { imageBase64, mediaType }。 */
-function getImageContent_(messageId) {
-  var res = lineFetch_('https://api-data.line.me/v2/bot/message/' + messageId + '/content', {
-    method: 'get'
-  });
+function getImageContent_(message) {
+  // 從其他 App 分享的照片可能存在外部網址（contentProvider.type = external），要直接從那裡下載
+  var provider = message.contentProvider || {};
+  var res = provider.type === 'external' && provider.originalContentUrl
+    ? UrlFetchApp.fetch(provider.originalContentUrl, { muteHttpExceptions: true })
+    : lineFetch_('https://api-data.line.me/v2/bot/message/' + message.id + '/content', { method: 'get' });
   if (res.getResponseCode() !== 200) {
-    throw new Error('下載圖片失敗 ' + res.getResponseCode());
+    // 詳細原因只寫在執行紀錄，不回給使用者
+    console.error('下載圖片失敗 ' + res.getResponseCode() + '：' + res.getContentText().slice(0, 500) +
+      '｜contentProvider=' + JSON.stringify(provider));
+    throw new Error('照片下載失敗');
   }
   var blob = res.getBlob();
   return {
