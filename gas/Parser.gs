@@ -7,9 +7,10 @@
  *
  * 回傳格式：
  *   {
- *     intent: 'record' | 'query' | 'other',
+ *     intent: 'record' | 'query' | 'recurring' | 'other',
  *     entries: [{ date, category, item, amount, note }],   // intent = record
  *     query: { start_date, end_date, category, keyword, detail }  // intent = query
+ *     recurring: { action, name, amount, amountBlank, day, every, category }  // intent = recurring
  *   }
  */
 
@@ -36,7 +37,7 @@ function parseMessage_(input, today) {
  */
 function validateParsed_(parsed, today) {
   parsed = parsed || {};
-  var intent = ['record', 'query', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
+  var intent = ['record', 'query', 'recurring', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
   var isDate = function (s) {
     return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00Z'));
   };
@@ -73,8 +74,24 @@ function validateParsed_(parsed, today) {
     detail: q.detail === true
   };
 
+  var r = parsed.recurring || {};
+  var int = function (v, min, max) {
+    var n = Math.round(Number(v));
+    return n >= min && n <= max ? n : null;
+  };
+  var recurring = {
+    action: ['upsert', 'delete', 'list'].indexOf(r.action) >= 0 ? r.action : 'list',
+    name: String(r.name || '').trim().slice(0, 50),
+    amount: int(r.amount, 1, 10000000),
+    amountBlank: false,
+    day: int(r.day, 1, 31),
+    every: int(r.every, 1, 12),
+    category: null
+  };
+
   if (intent === 'record' && entries.length === 0) intent = 'other';
-  return { intent: intent, entries: entries, query: query };
+  if (intent === 'recurring' && recurring.action !== 'list' && !recurring.name) intent = 'other';
+  return { intent: intent, entries: entries, query: query, recurring: recurring };
 }
 
 /**
@@ -111,7 +128,7 @@ function getParseSchema_() {
   return {
     type: 'object',
     properties: {
-      intent: { type: 'string', enum: ['record', 'query', 'other'] },
+      intent: { type: 'string', enum: ['record', 'query', 'recurring', 'other'] },
       entries: {
         type: 'array',
         items: {
@@ -127,6 +144,18 @@ function getParseSchema_() {
           additionalProperties: false
         }
       },
+      recurring: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['upsert', 'delete', 'list'] },
+          name: { type: 'string' },
+          amount: { type: 'number', description: '每期金額；沒提到或金額不固定填 0' },
+          day: { type: 'number', description: '每月幾號扣款；沒提到填 0' },
+          every: { type: 'number', description: '每幾個月一期；沒提到填 0' }
+        },
+        required: ['action', 'name', 'amount', 'day', 'every'],
+        additionalProperties: false
+      },
       query: {
         type: 'object',
         properties: {
@@ -140,7 +169,7 @@ function getParseSchema_() {
         additionalProperties: false
       }
     },
-    required: ['intent', 'entries', 'query'],
+    required: ['intent', 'entries', 'query', 'recurring'],
     additionalProperties: false
   };
 }
@@ -166,9 +195,12 @@ function buildSystemPrompt_(today) {
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
     '  問特定店家或品項（例如「全聯花多少」「這個月 7-11」）時，把店名或品項填在 keyword，分類用「全部」；否則 keyword 為空字串。',
     '  要求列出明細、清單、每一筆時 detail 為 true，否則為 false。',
+    '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
+    '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
+    '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',
     '- other：閒聊或與記帳無關的訊息。',
     '',
-    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false。'
+    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0。'
   ].join('\n');
 }
 

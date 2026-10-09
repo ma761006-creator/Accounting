@@ -39,6 +39,10 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
         while (data[row - 1].length < col) data[row - 1].push('');
         data[row - 1][col - 1] = toCell(v);
       },
+      setValues: (vals) => vals.forEach((vr, i) => vr.forEach((v, j) => {
+        while (data[row - 1 + i].length < col + j) data[row - 1 + i].push('');
+        data[row - 1 + i][col - 1 + j] = toCell(v);
+      })),
       getValues: () => data.slice(row - 1, row - 1 + numRows).map((r) => {
         const copy = r.slice(col - 1, col - 1 + numCols);
         while (copy.length < numCols) copy.push('');
@@ -548,6 +552,82 @@ test('固定支出：提醒推播到機器人加入的群組', () => {
 
   env.context.dailyJob(); // 沒有新事項就不推播
   assert.strictEqual(env.pushes.length, 1);
+});
+
+test('固定支出指令解析', () => {
+  const env = createEnv([], RULES);
+  const p = (t) => JSON.stringify(env.context.parseRecurringCommand_(t));
+  assert.strictEqual(p('固定支出'), '{"action":"list"}');
+  assert.strictEqual(p('固定支出 Netflix 390 每月15號'),
+    '{"action":"upsert","name":"Netflix","amount":390,"amountBlank":false,"day":15,"every":1,"category":null}');
+  assert.strictEqual(p('訂閱 YouTube Premium 199 每個月 3號'),
+    '{"action":"upsert","name":"YouTube Premium","amount":199,"amountBlank":false,"day":3,"every":1,"category":null}');
+  assert.strictEqual(p('固定支出 電費 不固定 每兩個月 20號'),
+    '{"action":"upsert","name":"電費","amount":null,"amountBlank":true,"day":20,"every":2,"category":null}');
+  assert.strictEqual(p('固定支出 房租 16000'),
+    '{"action":"upsert","name":"房租","amount":16000,"amountBlank":false,"day":null,"every":null,"category":null}');
+  assert.strictEqual(p('固定支出 刪除 Netflix'), '{"action":"delete","name":"Netflix"}');
+  assert.strictEqual(p('固定支出 Netflix 390 40號'), '{"action":"invalid"}');
+  assert.strictEqual(p('固定支出好多'), 'null');
+  assert.strictEqual(p('午餐 120'), 'null');
+});
+
+test('固定支出：用 LINE 新增、修改、刪除與詢問', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  const sheet = env.sheets['固定支出'];
+  const names = () => sheet.data.slice(1).map((r) => r[0]).join(',');
+  const fmt = (d) => (typeof d === 'string' ? d : env.context.Utilities.formatDate(d, 'Asia/Taipei', 'yyyy-MM-dd'));
+
+  env.post({ type: 'text', id: '1', text: '固定支出 Netflix 390 每月15號' });
+  assert.strictEqual(names(), '房租,水電,Netflix');
+  const netflix = sheet.data[3];
+  assert.strictEqual(netflix[1], 390);
+  assert.strictEqual(fmt(netflix[5]), env.context.firstDueDate_(today, 15));
+  assert.match(env.replies[0], /✅ 已新增固定支出\n・Netflix｜\$390｜每月 15 號/);
+
+  const rentNextBefore = fmt(sheet.data[1][5]);
+  env.post({ type: 'text', id: '2', text: '固定支出 房租 16000' });
+  assert.strictEqual(sheet.data[1][1], 16000);
+  assert.strictEqual(fmt(sheet.data[1][5]), rentNextBefore); // 只改金額，下次扣款日不變
+  assert.match(env.replies[1], /✏️ 已更新固定支出\n・房租｜\$16,000｜每月 5 號/);
+
+  env.post({ type: 'text', id: '3', text: '固定支出 電費 不固定 每2個月 20號' });
+  assert.match(env.replies[2], /電費｜金額不固定（只提醒）｜每 2 個月 20 號/);
+
+  env.post({ type: 'text', id: '4', text: '固定支出 刪除 netflix' });
+  assert.strictEqual(names(), '房租,水電,電費');
+  assert.match(env.replies[3], /已刪除固定支出「netflix」/);
+
+  env.post({ type: 'text', id: '5', text: '我有哪些固定支出？' });
+  assert.match(env.replies[4], /房租.*\n.*水電.*\n.*電費/);
+  env.post({ type: 'text', id: '6', text: '房租什麼時候繳' });
+  assert.match(env.replies[5], /^🔁 固定支出\n・房租｜\$16,000/);
+  assert.ok(!/水電/.test(env.replies[5]));
+
+  // 群組閒聊不會誤建項目；「Netflix 訂閱 390」仍是一般記帳
+  env.post({ type: 'text', id: '7', text: '固定支出好多' });
+  assert.strictEqual(env.replies.length, 6);
+  env.post({ type: 'text', id: '8', text: 'Netflix 訂閱 390' });
+  assert.match(env.replies[6], /已記帳/);
+  assert.strictEqual(names(), '房租,水電,電費');
+});
+
+test('固定支出：AI 自然語句新增', () => {
+  const env = createEnv([{
+    intent: 'recurring', entries: [], query: noQuery,
+    recurring: { action: 'upsert', name: 'Spotify', amount: 199, day: 0, every: 0 }
+  }], { GEMINI_API_KEY: 'gm' });
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '我每個月訂 Spotify，月費 199' });
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  const row = env.sheets['固定支出'].data[3];
+  assert.strictEqual(row[0], 'Spotify');
+  assert.strictEqual(row[3], +today.slice(8)); // 沒說幾號就用今天
+  assert.match(env.replies[0], /✅ 已新增固定支出/);
+  const schema = env.geminiRequests[0].body.generationConfig.responseSchema;
+  assert.ok(schema.properties.intent.enum.includes('recurring'));
 });
 
 let failed = 0;

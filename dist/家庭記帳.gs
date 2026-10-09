@@ -689,25 +689,21 @@ function daysInMonth_(y, m) {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
-/** 回覆「固定支出」指令：列出目前的固定支出。 */
-function formatRecurringList_() {
-  var sheet = getSpreadsheet_().getSheetByName(RECURRING_SHEET_NAME);
-  var items = [];
-  if (sheet && sheet.getLastRow() >= 2) {
-    sheet.getRange(2, 1, sheet.getLastRow() - 1, RECURRING_HEADERS.length).getValues().forEach(function (r) {
-      var item = readRecurringRow_(r);
-      if (item) items.push(item);
-    });
-  }
+/** 列出固定支出；filterName 有值時只列那一項。 */
+function formatRecurringList_(filterName) {
+  var items = listRecurringItems_().filter(function (item) {
+    return !filterName || item.name === filterName;
+  });
   if (items.length === 0) {
-    return '目前沒有固定支出。\n可以在試算表的「固定支出」工作表新增。';
+    return '目前沒有固定支出。\n' + recurringUsage_();
   }
   var lines = items.map(function (item) {
     var amount = item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
     var cycle = item.every === 1 ? '每月' : '每 ' + item.every + ' 個月';
     return '・' + item.name + '｜' + amount + '｜' + cycle + ' ' + item.day + ' 號｜下次 ' + (item.next || '未設定');
   });
-  return '🔁 固定支出\n' + lines.join('\n') + '\n\n要修改請到試算表的「固定支出」工作表。';
+  var footer = filterName ? '' : '\n\n新增或修改：「固定支出 Netflix 390 每月15號」\n刪除：「固定支出 刪除 Netflix」';
+  return '🔁 固定支出\n' + lines.join('\n') + footer;
 }
 
 /** 建立「固定支出」工作表，預設放房租和水電（金額、扣款日請改成實際的）。 */
@@ -731,6 +727,163 @@ function ensureDailyTrigger_() {
   ScriptApp.newTrigger('dailyJob').timeBased().everyDays(1).atHour(8).inTimezone(TIMEZONE).create();
 }
 
+/**
+ * 解析「固定支出」開頭的指令，不是這類指令回傳 null。
+ *   固定支出                         → 列出
+ *   固定支出 Netflix 390 每月15號     → 新增或更新
+ *   固定支出 電費 不固定 每2個月 20號 → 金額不固定（只提醒）
+ *   固定支出 房租 16000               → 只改金額
+ *   固定支出 刪除 Netflix             → 刪除
+ * 「訂閱」開頭也可以。
+ */
+function parseRecurringCommand_(text) {
+  var t = normalizeText_(text)
+    .replace(/每個月/g, '每月')
+    .replace(/每(兩|二)個?月/g, '每2個月')
+    .replace(/每三個?月/g, '每3個月');
+  var m = t.match(/^(固定支出|訂閱)(.*)$/);
+  if (!m) return null;
+  var rest = m[2].trim();
+  if (!rest) return { action: 'list' };
+
+  var del = rest.match(/^(刪除|移除)\s*(.+)$/);
+  if (del) return { action: 'delete', name: del[2].trim() };
+
+  var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, category: null };
+  var nameParts = [];
+  rest.split(/\s+/).forEach(function (token) {
+    var cycleDay = token.match(/^每(月|(\d+)個?月)(?:(\d{1,2})(?:號|日)?)?$/);
+    var day = token.match(/^(\d{1,2})(號|日)$/);
+    var amount = token.match(/^(\d+)(元)?$/);
+    if (cycleDay) {
+      cmd.every = cycleDay[2] ? +cycleDay[2] : 1;
+      if (cycleDay[3]) cmd.day = +cycleDay[3];
+    } else if (day) {
+      cmd.day = +day[1];
+    } else if (amount && nameParts.length > 0) {
+      cmd.amount = +amount[1];
+    } else if (token === '不固定' || token === '金額不固定') {
+      cmd.amountBlank = true;
+    } else if (CATEGORIES.indexOf(token) >= 0) {
+      cmd.category = token;
+    } else {
+      nameParts.push(token);
+    }
+  });
+  cmd.name = nameParts.join(' ');
+  if (!cmd.name) return { action: 'invalid' };
+  // 沒有金額、日期、週期的不算指令（例如「固定支出好多」「固定支出有哪些」），交給問句判斷
+  if (cmd.amount === null && !cmd.amountBlank && cmd.day === null && cmd.every === null && !cmd.category) return null;
+  if (cmd.day !== null && !(cmd.day >= 1 && cmd.day <= 31)) return { action: 'invalid' };
+  if (cmd.every !== null && !(cmd.every >= 1 && cmd.every <= 12)) return { action: 'invalid' };
+  return cmd;
+}
+
+/** 「我有哪些固定支出」「房租什麼時候繳」這類問句：回傳要篩選的名稱（'' 表示全部），不是則回傳 null。 */
+function matchRecurringQuestion_(text) {
+  var t = normalizeText_(text);
+  var asking = /什麼時候|幾號|哪天|何時|多少|哪些|清單|列表|有沒有|查|[?？]/.test(t);
+  if (/固定支出|訂閱/.test(t) && asking) return '';
+  if (!asking) return null;
+  var names = listRecurringItems_().map(function (item) {
+    return item.name;
+  });
+  for (var i = 0; i < names.length; i++) {
+    if (t.toLowerCase().indexOf(names[i].toLowerCase()) >= 0) return names[i];
+  }
+  return null;
+}
+
+function listRecurringItems_() {
+  var sheet = getSpreadsheet_().getSheetByName(RECURRING_SHEET_NAME);
+  var items = [];
+  if (sheet && sheet.getLastRow() >= 2) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, RECURRING_HEADERS.length).getValues().forEach(function (r) {
+      var item = readRecurringRow_(r);
+      if (item) items.push(item);
+    });
+  }
+  return items;
+}
+
+/** 執行固定支出指令，回傳要回覆的文字。 */
+function applyRecurringCommand_(cmd, today) {
+  if (cmd.action === 'list') return formatRecurringList_();
+  if (cmd.action === 'invalid') return recurringUsage_();
+
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(RECURRING_SHEET_NAME);
+  if (!sheet) {
+    ensureRecurringSheet_(today);
+    sheet = ss.getSheetByName(RECURRING_SHEET_NAME);
+  }
+  var rowNumber = findRecurringRow_(sheet, cmd.name);
+
+  if (cmd.action === 'delete') {
+    if (!rowNumber) return '找不到固定支出「' + cmd.name + '」。傳「固定支出」可以看目前的項目。';
+    sheet.deleteRow(rowNumber);
+    return '🗑️ 已刪除固定支出「' + cmd.name + '」';
+  }
+
+  var item;
+  if (rowNumber) {
+    var r = sheet.getRange(rowNumber, 1, 1, RECURRING_HEADERS.length).getValues()[0];
+    var name = String(r[RCOL.name]).trim();
+    var day = cmd.day || Math.round(Number(r[RCOL.day])) || +today.slice(8);
+    var every = cmd.every || Math.round(Number(r[RCOL.every])) || 1;
+    var amount = cmd.amountBlank ? '' : (cmd.amount !== null ? cmd.amount : r[RCOL.amount]);
+    var category = cmd.category || (CATEGORIES.indexOf(String(r[RCOL.category])) >= 0 ? String(r[RCOL.category]) : '其他');
+    var current = readRecurringRow_(r);
+    // 改了扣款日或週期，或原本沒有下次扣款日，就重新計算
+    var next = (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
+    item = { name: name, amount: amount, category: category, day: day, every: every, next: next };
+    sheet.getRange(rowNumber, 1, 1, RECURRING_HEADERS.length).setValues([[
+      name, amount, category, day, every, next, '是'
+    ]]);
+  } else {
+    var newDay = cmd.day || +today.slice(8);
+    var newEvery = cmd.every || 1;
+    // 沒說幾號就用今天的日期，從下一期開始（今天這期多半已經付了）
+    var newNext = cmd.day ? firstDueDate_(today, newDay) : addMonths_(today, newEvery, newDay);
+    item = {
+      name: cmd.name,
+      amount: cmd.amountBlank || cmd.amount === null ? '' : cmd.amount,
+      category: cmd.category || guessCategory_(cmd.name, loadKeywords_()),
+      day: newDay,
+      every: newEvery,
+      next: newNext
+    };
+    sheet.appendRow([item.name, item.amount, item.category, item.day, item.every, item.next, '是']);
+  }
+
+  var amountText = item.amount !== '' && Number(item.amount) > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
+  var cycle = item.every === 1 ? '每月' : '每 ' + item.every + ' 個月';
+  return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定支出\n' +
+    '・' + item.name + '｜' + amountText + '｜' + cycle + ' ' + item.day + ' 號\n' +
+    '・下次扣款：' + item.next + '（前一天會在群組提醒）';
+}
+
+function findRecurringRow_(sheet, name) {
+  if (sheet.getLastRow() < 2) return 0;
+  var names = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  var target = String(name).trim().toLowerCase();
+  for (var i = 0; i < names.length; i++) {
+    if (String(names[i][0]).trim().toLowerCase() === target) return i + 2;
+  }
+  return 0;
+}
+
+function recurringUsage_() {
+  return [
+    '固定支出的用法：',
+    '・固定支出 → 列出全部',
+    '・固定支出 Netflix 390 每月15號 → 新增或更新',
+    '・固定支出 電費 不固定 每2個月 20號 → 金額不固定，只提醒',
+    '・固定支出 房租 16000 → 只改金額',
+    '・固定支出 刪除 Netflix → 刪除'
+  ].join('\n');
+}
+
 // ===== Parser.gs =====
 
 /**
@@ -742,9 +895,10 @@ function ensureDailyTrigger_() {
  *
  * 回傳格式：
  *   {
- *     intent: 'record' | 'query' | 'other',
+ *     intent: 'record' | 'query' | 'recurring' | 'other',
  *     entries: [{ date, category, item, amount, note }],   // intent = record
  *     query: { start_date, end_date, category, keyword, detail }  // intent = query
+ *     recurring: { action, name, amount, amountBlank, day, every, category }  // intent = recurring
  *   }
  */
 
@@ -771,7 +925,7 @@ function parseMessage_(input, today) {
  */
 function validateParsed_(parsed, today) {
   parsed = parsed || {};
-  var intent = ['record', 'query', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
+  var intent = ['record', 'query', 'recurring', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
   var isDate = function (s) {
     return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00Z'));
   };
@@ -808,8 +962,24 @@ function validateParsed_(parsed, today) {
     detail: q.detail === true
   };
 
+  var r = parsed.recurring || {};
+  var int = function (v, min, max) {
+    var n = Math.round(Number(v));
+    return n >= min && n <= max ? n : null;
+  };
+  var recurring = {
+    action: ['upsert', 'delete', 'list'].indexOf(r.action) >= 0 ? r.action : 'list',
+    name: String(r.name || '').trim().slice(0, 50),
+    amount: int(r.amount, 1, 10000000),
+    amountBlank: false,
+    day: int(r.day, 1, 31),
+    every: int(r.every, 1, 12),
+    category: null
+  };
+
   if (intent === 'record' && entries.length === 0) intent = 'other';
-  return { intent: intent, entries: entries, query: query };
+  if (intent === 'recurring' && recurring.action !== 'list' && !recurring.name) intent = 'other';
+  return { intent: intent, entries: entries, query: query, recurring: recurring };
 }
 
 /**
@@ -846,7 +1016,7 @@ function getParseSchema_() {
   return {
     type: 'object',
     properties: {
-      intent: { type: 'string', enum: ['record', 'query', 'other'] },
+      intent: { type: 'string', enum: ['record', 'query', 'recurring', 'other'] },
       entries: {
         type: 'array',
         items: {
@@ -862,6 +1032,18 @@ function getParseSchema_() {
           additionalProperties: false
         }
       },
+      recurring: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['upsert', 'delete', 'list'] },
+          name: { type: 'string' },
+          amount: { type: 'number', description: '每期金額；沒提到或金額不固定填 0' },
+          day: { type: 'number', description: '每月幾號扣款；沒提到填 0' },
+          every: { type: 'number', description: '每幾個月一期；沒提到填 0' }
+        },
+        required: ['action', 'name', 'amount', 'day', 'every'],
+        additionalProperties: false
+      },
       query: {
         type: 'object',
         properties: {
@@ -875,7 +1057,7 @@ function getParseSchema_() {
         additionalProperties: false
       }
     },
-    required: ['intent', 'entries', 'query'],
+    required: ['intent', 'entries', 'query', 'recurring'],
     additionalProperties: false
   };
 }
@@ -901,9 +1083,12 @@ function buildSystemPrompt_(today) {
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
     '  問特定店家或品項（例如「全聯花多少」「這個月 7-11」）時，把店名或品項填在 keyword，分類用「全部」；否則 keyword 為空字串。',
     '  要求列出明細、清單、每一筆時 detail 為 true，否則為 false。',
+    '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
+    '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
+    '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',
     '- other：閒聊或與記帳無關的訊息。',
     '',
-    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false。'
+    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0。'
   ].join('\n');
 }
 
@@ -1087,6 +1272,7 @@ function helpText_() {
       '・加「明細」列出每一筆：「本月 明細」',
       '',
       '固定支出：傳「固定支出」查看房租、水電等',
+      '・新增或修改：固定支出 Netflix 390 每月15號',
       '',
       '刪除：傳「刪除」會刪掉你最近一次記的帳',
       '',
@@ -1109,6 +1295,7 @@ function helpText_() {
     '・本月明細',
     '',
     '固定支出：傳「固定支出」查看房租、水電等',
+    '・新增：我每個月訂 Netflix 390，15 號扣款',
     '',
     '刪除：傳「刪除」會刪掉你最近一次記的帳',
     '',
@@ -1171,8 +1358,17 @@ function handleEvent_(event) {
       replyText_(event.replyToken, helpText_());
       return;
     }
-    if (text === '固定支出') {
-      replyText_(event.replyToken, formatRecurringList_());
+    var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+    var recurringCmd = parseRecurringCommand_(text);
+    if (recurringCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyRecurringCommand_(recurringCmd, today0);
+      }));
+      return;
+    }
+    var recurringName = matchRecurringQuestion_(text);
+    if (recurringName !== null) {
+      replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
     if (text === '刪除' || text === '取消') {
@@ -1210,6 +1406,13 @@ function handleEvent_(event) {
       });
     });
     replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder));
+    return;
+  }
+
+  if (parsed.intent === 'recurring') {
+    replyText_(event.replyToken, withLock_(function () {
+      return applyRecurringCommand_(parsed.recurring, today);
+    }));
     return;
   }
 
