@@ -1680,7 +1680,8 @@ var GEMINI_DEFAULT_MODEL = 'gemini-flash-latest';
 function toGeminiSchema_(schema) {
   var out = { type: schema.type.toUpperCase() };
   if (schema.description) out.description = schema.description;
-  if (schema.enum) out.enum = schema.enum;
+  // Gemini 不接受空字串的選項；有空字串的就改成一般文字欄位（寫入前 validateParsed_ 會再檢查）
+  if (schema.enum && schema.enum.indexOf('') < 0) out.enum = schema.enum;
   if (schema.required) out.required = schema.required;
   if (schema.items) out.items = toGeminiSchema_(schema.items);
   if (schema.properties) {

@@ -317,6 +317,11 @@ test('設定 GEMINI_API_KEY 時改用 Gemini', () => {
   assert.strictEqual(schema.type, 'OBJECT');
   assert.strictEqual(schema.properties.entries.items.properties.amount.type, 'NUMBER');
   assert.ok(!JSON.stringify(schema).includes('additionalProperties'));
+  // Gemini 拒絕空字串選項（enum[0]: cannot be empty），整份格式都不能有
+  const enums = [];
+  const walk = (o) => { if (o && typeof o === 'object') { if (Array.isArray(o.enum)) enums.push(...o.enum); Object.values(o).forEach(walk); } };
+  walk(schema);
+  assert.ok(enums.length > 0 && enums.every((v) => v !== ''), 'Gemini schema 有空字串 enum');
   assert.deepStrictEqual(req.body.contents[0].parts, [{ text: '午餐 120' }]);
   assert.strictEqual(env.geminiRequests[1].body.contents[0].parts[0].inlineData.mimeType, 'image/jpeg');
   assert.deepStrictEqual(env.rows.slice(1).map((r) => r[3]), ['午餐', '全聯']);
