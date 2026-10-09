@@ -276,6 +276,7 @@ function getDefaultKeywords_() {
     '餐飲': [
       '早餐', '午餐', '晚餐', '宵夜', '早午餐', '點心', '零食', '飲料', '咖啡', '手搖', '珍奶', '茶',
       '便當', '麵', '飯', '火鍋', '水果', '買菜', '菜市場', '外送', 'ubereats', 'foodpanda',
+      '食材', '生鮮', '魚', '肉', '蛋', '蔬菜', '青菜', '豆腐', '牛奶',
       '麥當勞', '肯德基', '摩斯', '星巴克',
       '7-11', '711', '7－11', '小七', '統一超商', '全家', '萊爾富'
     ],
@@ -312,7 +313,14 @@ function parseWithRules_(text, today) {
   });
 
   var entries = [];
+  var statedTotal = null;
   for (var i = 0; i < segments.length; i++) {
+    // 「金額1125元」「合計 1125」這類總計行不是另一筆消費，只拿來核對
+    var totalLine = segments[i].match(/^(金額|合計|總計|總共|共計|小計|總額|共|total)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(元|塊錢|塊)?$/i);
+    if (totalLine && segments.length > 1) {
+      statedTotal = Math.round(Number(totalLine[2]));
+      continue;
+    }
     var entry = parseEntry_(segments[i], today, keywords);
     // 有任何一段看不懂就當作不是記帳，避免把聊天內容誤記
     if (!entry) {
@@ -323,7 +331,7 @@ function parseWithRules_(text, today) {
   if (entries.length === 0) {
     return { intent: 'other', entries: [], query: emptyQuery_(today) };
   }
-  return { intent: 'record', entries: entries, query: emptyQuery_(today) };
+  return { intent: 'record', entries: entries, query: emptyQuery_(today), statedTotal: statedTotal };
 }
 
 function emptyQuery_(today) {
@@ -1186,7 +1194,11 @@ function validateParsed_(parsed, today) {
 
   if (intent === 'record' && entries.length === 0) intent = 'other';
   if (intent === 'recurring' && recurring.action !== 'list' && !recurring.name) intent = 'other';
-  return { intent: intent, entries: entries, query: query, recurring: recurring };
+  var statedTotal = Math.round(Number(parsed.statedTotal));
+  return {
+    intent: intent, entries: entries, query: query, recurring: recurring,
+    statedTotal: statedTotal > 0 ? statedTotal : null
+  };
 }
 
 /**
@@ -1286,6 +1298,7 @@ function buildSystemPrompt_(today) {
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
     '  一則訊息可能有多筆，請逐筆列在 entries。金額一律為新台幣正整數。',
     '  沒提到日期就用今天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
+    '  「金額 1125」「合計 1125」「總共 1125」這類總計行不是另一筆消費，不要記成 entries。',
     '  收據照片：以實付總金額為準，一張收據通常記成一筆；若品項明顯分屬不同分類，可依分類拆成多筆，金額加總需等於實付金額。',
     '- query：訊息在問花費統計（例如「這個月花多少」「上個月交通費」）。',
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
@@ -1635,7 +1648,7 @@ function handleEvent_(event) {
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
-    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder));
+    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder, parsed.statedTotal));
     return;
   }
 
@@ -1681,7 +1694,7 @@ function handleDelete_(userId) {
   return '🗑️ 已刪除：\n' + lines.join('\n');
 }
 
-function formatRecorded_(entries, recorder) {
+function formatRecorded_(entries, recorder, statedTotal) {
   var total = 0;
   var lines = entries.map(function (e) {
     total += e.amount;
@@ -1692,6 +1705,11 @@ function formatRecorded_(entries, recorder) {
   var text = '✅ 已記帳（' + recorder + '）\n' + lines.join('\n');
   if (entries.length > 1) {
     text += '\n合計 $' + formatMoney_(total);
+  }
+  if (statedTotal) {
+    text += statedTotal === total
+      ? '（和你寫的總計相符）'
+      : '\n⚠️ 你寫的總計是 $' + formatMoney_(statedTotal) + '，和明細加總 $' + formatMoney_(total) + ' 不同，請確認';
   }
   return text + '\n\n記錯了？傳「刪除」即可撤銷。';
 }

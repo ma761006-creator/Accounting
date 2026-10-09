@@ -738,6 +738,22 @@ test('Gemini 一直忙線（503）：文字改用規則辨識，照片和聊天�
   assert.strictEqual(env.rows[2][3], '中油');
 });
 
+test('總計行（金額／合計）不重複記帳，並核對明細加總', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '今天午餐660元\n食材鮭魚菲力275\n鯖魚*2片190\n金額1125元' });
+  const ledger = env.rows.slice(1).map((r) => r[3] + '|' + r[2] + '|' + r[4]).join(',');
+  assert.strictEqual(ledger, '午餐|餐飲|660,食材鮭魚菲力|餐飲|275,鯖魚*2片|餐飲|190');
+  assert.match(env.replies[0], /合計 \$1,125（和你寫的總計相符）/);
+
+  env.post({ type: 'text', id: '2', text: '早餐 80、咖啡 60、合計：150' });
+  assert.match(env.replies[1], /⚠️ 你寫的總計是 \$150，和明細加總 \$140 不同/);
+  assert.strictEqual(env.rows.length - 1, 5);
+
+  // 單獨一行「金額 100」沒有其他明細時，仍當成一筆記帳
+  env.post({ type: 'text', id: '3', text: '金額 100' });
+  assert.strictEqual(env.rows.length - 1, 6);
+});
+
 let failed = 0;
 for (const t of tests) {
   try {

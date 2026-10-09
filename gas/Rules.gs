@@ -16,6 +16,7 @@ function getDefaultKeywords_() {
     '餐飲': [
       '早餐', '午餐', '晚餐', '宵夜', '早午餐', '點心', '零食', '飲料', '咖啡', '手搖', '珍奶', '茶',
       '便當', '麵', '飯', '火鍋', '水果', '買菜', '菜市場', '外送', 'ubereats', 'foodpanda',
+      '食材', '生鮮', '魚', '肉', '蛋', '蔬菜', '青菜', '豆腐', '牛奶',
       '麥當勞', '肯德基', '摩斯', '星巴克',
       '7-11', '711', '7－11', '小七', '統一超商', '全家', '萊爾富'
     ],
@@ -52,7 +53,14 @@ function parseWithRules_(text, today) {
   });
 
   var entries = [];
+  var statedTotal = null;
   for (var i = 0; i < segments.length; i++) {
+    // 「金額1125元」「合計 1125」這類總計行不是另一筆消費，只拿來核對
+    var totalLine = segments[i].match(/^(金額|合計|總計|總共|共計|小計|總額|共|total)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(元|塊錢|塊)?$/i);
+    if (totalLine && segments.length > 1) {
+      statedTotal = Math.round(Number(totalLine[2]));
+      continue;
+    }
     var entry = parseEntry_(segments[i], today, keywords);
     // 有任何一段看不懂就當作不是記帳，避免把聊天內容誤記
     if (!entry) {
@@ -63,7 +71,7 @@ function parseWithRules_(text, today) {
   if (entries.length === 0) {
     return { intent: 'other', entries: [], query: emptyQuery_(today) };
   }
-  return { intent: 'record', entries: entries, query: emptyQuery_(today) };
+  return { intent: 'record', entries: entries, query: emptyQuery_(today), statedTotal: statedTotal };
 }
 
 function emptyQuery_(today) {

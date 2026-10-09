@@ -173,7 +173,7 @@ function handleEvent_(event) {
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
-    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder));
+    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder, parsed.statedTotal));
     return;
   }
 
@@ -219,7 +219,7 @@ function handleDelete_(userId) {
   return '🗑️ 已刪除：\n' + lines.join('\n');
 }
 
-function formatRecorded_(entries, recorder) {
+function formatRecorded_(entries, recorder, statedTotal) {
   var total = 0;
   var lines = entries.map(function (e) {
     total += e.amount;
@@ -230,6 +230,11 @@ function formatRecorded_(entries, recorder) {
   var text = '✅ 已記帳（' + recorder + '）\n' + lines.join('\n');
   if (entries.length > 1) {
     text += '\n合計 $' + formatMoney_(total);
+  }
+  if (statedTotal) {
+    text += statedTotal === total
+      ? '（和你寫的總計相符）'
+      : '\n⚠️ 你寫的總計是 $' + formatMoney_(statedTotal) + '，和明細加總 $' + formatMoney_(total) + ' 不同，請確認';
   }
   return text + '\n\n記錯了？傳「刪除」即可撤銷。';
 }
