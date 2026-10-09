@@ -183,10 +183,19 @@ function parseRecurringCommand_(text) {
     .replace(/每個月/g, '每月')
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
-  var m = t.match(/^(固定支出|訂閱)(.*)$/);
+  // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)(.*)$/);
   if (!m) return null;
   var rest = m[2].trim();
   if (!rest) return { action: 'list' };
+  // 「房租9900元每月1號」這種黏在一起的寫法，先拆成「房租 9900 每月 1號」
+  rest = rest
+    .replace(/每\s*(\d+)\s*個?月/g, ' 每$1個月 ')
+    .replace(/每月/g, ' 每月 ')
+    .replace(/(\d{1,2})\s*(號|日)/g, ' $1$2 ')
+    .replace(/(\d+)\s*(元|塊錢|塊)/g, ' $1 ')
+    .replace(/([^\d\s\-－每])(\d+)(?=\s|$)/g, '$1 $2')
+    .trim();
 
   var del = rest.match(/^(刪除|移除)\s*(.+)$/);
   if (del) return { action: 'delete', name: del[2].trim() };

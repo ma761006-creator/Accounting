@@ -616,6 +616,21 @@ test('育兒、旅遊、娛樂分類：內建關鍵字與指定分類', () => {
   assert.strictEqual(cat('KTV 900'), '娛樂');
 });
 
+test('修改固定支出：開頭有「修改」、金額日期黏在一起也看得懂，不會改到帳本', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '宵夜 75' });
+  env.post({ type: 'text', id: '2', text: '修改固定支出房租 9900元每月1號' });
+  assert.match(env.replies[1], /固定支出[\s\S]*房租｜\$9,900｜每月 1 號/);
+  assert.strictEqual(env.rows[1][3], '宵夜'); // 帳本那筆沒被改名
+  const r = (t) => JSON.stringify(env.context.parseRecurringCommand_(t));
+  assert.strictEqual(r('固定支出房租9900元每月1號'), r('固定支出 房租 9900 每月1號'));
+  assert.match(r('固定支出 7-11 100 每月'), /"name":"7-11","amount":100/);
+  assert.match(r('固定支出 水費 不固定 每2個月10號'), /"day":10,"every":2/);
+  // 修改帳本時，看不懂的內容不會直接當成新品項名稱
+  assert.strictEqual(env.context.parseModifyCommand_('修改 房租 9900元每月1號', '2026-10-09').action, 'invalid');
+  assert.strictEqual(env.context.parseModifyCommand_('修改 午餐 早餐', '2026-10-09').newItem, '早餐');
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
