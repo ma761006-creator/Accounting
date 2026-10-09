@@ -20,7 +20,7 @@ function helpText_() {
     '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
     '✏️ 修改：修改 150、修改 交通、午餐改成150',
-    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除 昨天 停車 60',
+    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除重複',
     '',
     '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
@@ -202,6 +202,9 @@ function handleEvent_(event) {
     return e.amount > 0;
   });
 
+  // 照片：同一張發票不會有兩筆一模一樣的帳，也不會另外多一筆「總計」
+  if (message.type === 'image') parsed.entries = dedupeReceiptEntries_(parsed.entries);
+
   if (parsed.intent === 'record' && parsed.entries.length > 0) {
     var recorder = getDisplayName_(event.source);
     withLock_(function () {
@@ -258,6 +261,31 @@ function handleEvent_(event) {
     }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n點下面的按鈕，或傳「說明」看使用方式。', mainMenu_());
   }
+}
+
+function dedupeReceiptEntries_(entries) {
+  var seen = {};
+  var unique = entries.filter(function (e) {
+    var key = e.item + '|' + e.amount;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+  if (unique.length < 3) {
+    // 兩筆金額相同（例如「健身房月費 1500」和「總計 1500」）→ 只留第一筆
+    if (unique.length === 2 && unique[0].amount === unique[1].amount) return [unique[0]];
+    return unique;
+  }
+  // 有一筆剛好等於其他筆的加總 → 那是總計，不另外記
+  var total = unique.reduce(function (sum, e) {
+    return sum + e.amount;
+  }, 0);
+  var totalLine = unique.filter(function (e) {
+    return e.amount * 2 === total;
+  })[0];
+  return totalLine ? unique.filter(function (e) {
+    return e !== totalLine;
+  }) : unique;
 }
 
 function formatRecorded_(entries, recorder, statedTotal) {

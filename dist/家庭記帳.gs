@@ -1197,6 +1197,9 @@ function parseAnalysis_(text, today) {
 function parseModifyCommand_(text, today) {
   var t = normalizeText_(text);
 
+  // 「重複記帳了，刪除」「刪除重複」：刪掉自己最近重複的那筆
+  if (/重複|重覆|記兩次|記了兩次/.test(t) && /刪|移除|取消|撤銷/.test(t)) return { action: 'dedupe' };
+
   // 「取消」只能單獨使用；指定刪除哪筆要用「刪除」，避免「取消聚餐」這種聊天誤刪
   if (t === '取消') return { action: 'delete', keyword: '', date: '', amount: null };
   var del = t.match(/^刪除\s*(.*)$/);
@@ -1331,9 +1334,54 @@ function notFound_(target) {
   return '找不到你記的「' + desc + '」。\n只能修改或刪除自己記的帳；其他人記的可以到試算表直接改。';
 }
 
+/**
+ * 刪除自己最近重複的帳：在自己最近 20 筆裡，日期、品項、金額都相同的只留第一筆。
+ * 找不到完全相同的，再看同一天、同金額的（例如照片辨識出的品項名稱略有不同）。
+ */
+function deleteDuplicates_(userId) {
+  var sheet = getLedgerSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var values = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+  var dateOf = function (v) {
+    return v instanceof Date ? Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd') : String(v);
+  };
+  var mine = [];
+  for (var i = values.length - 1; i >= 0 && mine.length < 20; i--) {
+    if (values[i][COL.userId] === userId) mine.unshift({ row: i + 2, values: values[i] });
+  }
+  var findDups = function (keyOf) {
+    var seen = {};
+    return mine.filter(function (x) {
+      var key = keyOf(x.values);
+      if (seen[key]) return true;
+      seen[key] = true;
+      return false;
+    });
+  };
+  var dups = findDups(function (r) {
+    return dateOf(r[COL.date]) + '|' + r[COL.item] + '|' + Number(r[COL.amount]);
+  });
+  if (!dups.length) {
+    dups = findDups(function (r) {
+      return dateOf(r[COL.date]) + '|' + Number(r[COL.amount]);
+    });
+  }
+  // 由下往上刪，列號才不會跑掉
+  for (var j = dups.length - 1; j >= 0; j--) sheet.deleteRow(dups[j].row);
+  return dups;
+}
+
 /** 執行修改或刪除，回傳回覆文字。 */
 function applyModifyCommand_(cmd, userId) {
   if (cmd.action === 'invalid') return cmd.usage;
+  if (cmd.action === 'dedupe') {
+    var removed = deleteDuplicates_(userId);
+    if (!removed.length) return '你最近記的帳沒有重複的。\n要刪最近一筆請傳「刪除」，指定哪一筆例如「刪除 健身房」。';
+    return '🗑️ 已刪除重複的 ' + removed.length + ' 筆（保留第一筆）：\n' + removed.map(function (x) {
+      return '・' + describeRow_(x.values);
+    }).join('\n');
+  }
   var found = findTargetRows_(userId, cmd);
   if (found.rows.length === 0) {
     var isRecurring = cmd.action === 'delete' && cmd.keyword && listRecurringItems_().some(function (item) {
@@ -1390,7 +1438,8 @@ function modifyUsage_() {
     '刪除的用法：',
     '・刪除 → 最近一次記的帳',
     '・刪除 午餐 → 最近一筆「午餐」',
-    '・刪除 昨天 停車 60 → 指定日期、品項、金額'
+    '・刪除 昨天 停車 60 → 指定日期、品項、金額',
+    '・刪除重複 → 重複記到的帳只留一筆'
   ].join('\n');
 }
 
@@ -1646,6 +1695,7 @@ function buildSystemPrompt_(today) {
     '  訊息沒說用在哪裡（例如「我今天花了120元」）時不要猜，item 填「未說明」、category 填「其他」。',
     '  「金額 1125」「合計 1125」「總共 1125」這類總計行不是另一筆消費，不要記成 entries。',
     '  收據照片：以實付總金額為準，一張收據通常記成一筆；若品項明顯分屬不同分類，可依分類拆成多筆，金額加總需等於實付金額。',
+    '  發票上的品項明細、小計、合計、應付、實付、信用卡簽單常出現同一個金額，只能記一次，不要重複記成多筆。',
     '- query：訊息在問花費統計（例如「這個月花多少」「上個月交通費」）。',
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
     '  問特定店家或品項（例如「全聯花多少」「這個月 7-11」）時，把店名或品項填在 keyword，分類用「全部」；否則 keyword 為空字串。',
@@ -1867,7 +1917,7 @@ function helpText_() {
     '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
     '✏️ 修改：修改 150、修改 交通、午餐改成150',
-    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除 昨天 停車 60',
+    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除重複',
     '',
     '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
@@ -2049,6 +2099,9 @@ function handleEvent_(event) {
     return e.amount > 0;
   });
 
+  // 照片：同一張發票不會有兩筆一模一樣的帳，也不會另外多一筆「總計」
+  if (message.type === 'image') parsed.entries = dedupeReceiptEntries_(parsed.entries);
+
   if (parsed.intent === 'record' && parsed.entries.length > 0) {
     var recorder = getDisplayName_(event.source);
     withLock_(function () {
@@ -2105,6 +2158,31 @@ function handleEvent_(event) {
     }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n點下面的按鈕，或傳「說明」看使用方式。', mainMenu_());
   }
+}
+
+function dedupeReceiptEntries_(entries) {
+  var seen = {};
+  var unique = entries.filter(function (e) {
+    var key = e.item + '|' + e.amount;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+  if (unique.length < 3) {
+    // 兩筆金額相同（例如「健身房月費 1500」和「總計 1500」）→ 只留第一筆
+    if (unique.length === 2 && unique[0].amount === unique[1].amount) return [unique[0]];
+    return unique;
+  }
+  // 有一筆剛好等於其他筆的加總 → 那是總計，不另外記
+  var total = unique.reduce(function (sum, e) {
+    return sum + e.amount;
+  }, 0);
+  var totalLine = unique.filter(function (e) {
+    return e.amount * 2 === total;
+  })[0];
+  return totalLine ? unique.filter(function (e) {
+    return e !== totalLine;
+  }) : unique;
 }
 
 function formatRecorded_(entries, recorder, statedTotal) {
