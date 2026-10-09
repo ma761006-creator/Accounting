@@ -1105,14 +1105,25 @@ function parseAnalysis_(text, today) {
 function parseMessage_(input, today) {
   var provider = getProvider_();
   var parsed;
-  if (provider === 'gemini') {
-    parsed = parseWithGemini_(input, today);
-  } else if (provider === 'claude') {
-    parsed = parseWithClaude_(input, today);
-  } else {
+  var aiError = '';
+  try {
+    if (provider === 'gemini') {
+      parsed = parseWithGemini_(input, today);
+    } else if (provider === 'claude') {
+      parsed = parseWithClaude_(input, today);
+    } else {
+      parsed = parseWithRules_(input.text, today);
+    }
+  } catch (err) {
+    // AI 忙線或出錯時，文字訊息改用免費的規則辨識，「午餐 120」這類格式照樣能記帳
+    if (provider === 'rules' || !input.text) throw err;
+    console.warn('AI 解析失敗，改用規則辨識：' + (err.message || err));
+    aiError = String(err.message || err);
     parsed = parseWithRules_(input.text, today);
   }
-  return validateParsed_(parsed, today);
+  var result = validateParsed_(parsed, today);
+  result.aiError = aiError;
+  return result;
 }
 
 /**
@@ -1179,23 +1190,24 @@ function validateParsed_(parsed, today) {
 }
 
 /**
- * 呼叫外部 API，遇到暫時性錯誤（429、5xx、連線失敗）時等一下再試一次。
- * LINE 的回覆權杖有時效，所以只重試一次。
+ * 呼叫外部 API，遇到暫時性錯誤（429、5xx、連線失敗）時等一下再試，最多重試兩次。
+ * LINE 的回覆權杖有時效，所以總等待時間控制在幾秒內。
  */
 function fetchWithRetry_(url, options) {
-  var res;
-  try {
-    res = UrlFetchApp.fetch(url, options);
-  } catch (err) {
-    Utilities.sleep(1500);
-    return UrlFetchApp.fetch(url, options);
+  var waits = [1000, 3000];
+  for (var attempt = 0; ; attempt++) {
+    var res = null;
+    try {
+      res = UrlFetchApp.fetch(url, options);
+    } catch (err) {
+      if (attempt >= waits.length) throw err;
+    }
+    if (res) {
+      var code = res.getResponseCode();
+      if ((code !== 429 && code < 500) || attempt >= waits.length) return res;
+    }
+    Utilities.sleep(waits[attempt]);
   }
-  var code = res.getResponseCode();
-  if (code === 429 || code >= 500) {
-    Utilities.sleep(1500);
-    return UrlFetchApp.fetch(url, options);
-  }
-  return res;
 }
 
 /** @return {'rules'|'gemini'|'claude'} */
@@ -1352,11 +1364,11 @@ function parseWithGemini_(input, today) {
   );
 
   var status = res.getResponseCode();
-  if (status === 429) {
-    throw new Error('Gemini 免費額度已用完，請稍後再試');
-  }
   if (status !== 200) {
-    throw new Error('Gemini API 錯誤 ' + status + '：' + res.getContentText().slice(0, 500));
+    console.error('Gemini API 錯誤 ' + status + '：' + res.getContentText().slice(0, 1000));
+    if (status === 429) throw new Error('Gemini 免費額度已用完');
+    if (status >= 500) throw new Error('Gemini 暫時忙線');
+    throw new Error('Gemini API 錯誤 ' + status + '（請檢查 GEMINI_API_KEY 或 GEMINI_MODEL）');
   }
 
   var data = JSON.parse(res.getContentText());
@@ -1423,7 +1435,9 @@ function parseWithClaude_(input, today) {
 
   var status = res.getResponseCode();
   if (status !== 200) {
-    throw new Error('Claude API 錯誤 ' + status + '：' + res.getContentText().slice(0, 500));
+    console.error('Claude API 錯誤 ' + status + '：' + res.getContentText().slice(0, 1000));
+    if (status === 429 || status >= 500) throw new Error('Claude 暫時忙線');
+    throw new Error('Claude API 錯誤 ' + status + '（請檢查 ANTHROPIC_API_KEY）');
   }
 
   var data = JSON.parse(res.getContentText());
@@ -1524,11 +1538,20 @@ function doPost(e) {
     } catch (err) {
       console.error(err && err.stack ? err.stack : err);
       if (event.replyToken) {
-        replyText_(event.replyToken, '⚠️ 處理失敗，請稍後再試一次。\n（' + String(err.message || err).slice(0, 200) + '）');
+        replyText_(event.replyToken, friendlyError_(err, event));
       }
     }
   });
   return ok_();
+}
+
+function friendlyError_(err, event) {
+  var msg = String((err && err.message) || err);
+  var isImage = event.message && event.message.type === 'image';
+  if (/忙線|額度/.test(msg)) {
+    return '⏳ ' + msg + '，' + (isImage ? '照片暫時無法辨識，請稍後再傳一次，或先用文字記帳，例如「全聯 560」。' : '請稍後再試一次。');
+  }
+  return '⚠️ 處理失敗，請稍後再試一次。\n（' + msg.slice(0, 200) + '）';
 }
 
 function ok_() {
@@ -1582,6 +1605,7 @@ function handleEvent_(event) {
     }
     input = { text: text };
   } else if (message.type === 'image') {
+    // 照片只能靠 AI 辨識；AI 忙線時請家人稍後再傳
     if (getProvider_() === 'rules') {
       // 沒有 AI 無法讀收據；群組裡家人分享照片很常見，只在私訊提示
       if (!isGroup) {
@@ -1593,6 +1617,7 @@ function handleEvent_(event) {
   } else {
     return;
   }
+
 
   var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
   var parsed = parseMessage_(input, today);
@@ -1634,7 +1659,11 @@ function handleEvent_(event) {
 
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
-    var hint = getProvider_() === 'rules' ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
+    var hint = getProvider_() === 'rules' || parsed.aiError ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
+    if (parsed.aiError) {
+      replyText_(event.replyToken, '⏳ AI 暫時忙線，這則看不出要記帳還是查詢。' + hint + '\n也可以稍後再傳一次。');
+      return;
+    }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
 }

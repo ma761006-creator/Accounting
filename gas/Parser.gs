@@ -21,14 +21,25 @@
 function parseMessage_(input, today) {
   var provider = getProvider_();
   var parsed;
-  if (provider === 'gemini') {
-    parsed = parseWithGemini_(input, today);
-  } else if (provider === 'claude') {
-    parsed = parseWithClaude_(input, today);
-  } else {
+  var aiError = '';
+  try {
+    if (provider === 'gemini') {
+      parsed = parseWithGemini_(input, today);
+    } else if (provider === 'claude') {
+      parsed = parseWithClaude_(input, today);
+    } else {
+      parsed = parseWithRules_(input.text, today);
+    }
+  } catch (err) {
+    // AI 忙線或出錯時，文字訊息改用免費的規則辨識，「午餐 120」這類格式照樣能記帳
+    if (provider === 'rules' || !input.text) throw err;
+    console.warn('AI 解析失敗，改用規則辨識：' + (err.message || err));
+    aiError = String(err.message || err);
     parsed = parseWithRules_(input.text, today);
   }
-  return validateParsed_(parsed, today);
+  var result = validateParsed_(parsed, today);
+  result.aiError = aiError;
+  return result;
 }
 
 /**
@@ -95,23 +106,24 @@ function validateParsed_(parsed, today) {
 }
 
 /**
- * 呼叫外部 API，遇到暫時性錯誤（429、5xx、連線失敗）時等一下再試一次。
- * LINE 的回覆權杖有時效，所以只重試一次。
+ * 呼叫外部 API，遇到暫時性錯誤（429、5xx、連線失敗）時等一下再試，最多重試兩次。
+ * LINE 的回覆權杖有時效，所以總等待時間控制在幾秒內。
  */
 function fetchWithRetry_(url, options) {
-  var res;
-  try {
-    res = UrlFetchApp.fetch(url, options);
-  } catch (err) {
-    Utilities.sleep(1500);
-    return UrlFetchApp.fetch(url, options);
+  var waits = [1000, 3000];
+  for (var attempt = 0; ; attempt++) {
+    var res = null;
+    try {
+      res = UrlFetchApp.fetch(url, options);
+    } catch (err) {
+      if (attempt >= waits.length) throw err;
+    }
+    if (res) {
+      var code = res.getResponseCode();
+      if ((code !== 429 && code < 500) || attempt >= waits.length) return res;
+    }
+    Utilities.sleep(waits[attempt]);
   }
-  var code = res.getResponseCode();
-  if (code === 429 || code >= 500) {
-    Utilities.sleep(1500);
-    return UrlFetchApp.fetch(url, options);
-  }
-  return res;
 }
 
 /** @return {'rules'|'gemini'|'claude'} */

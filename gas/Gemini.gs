@@ -56,11 +56,11 @@ function parseWithGemini_(input, today) {
   );
 
   var status = res.getResponseCode();
-  if (status === 429) {
-    throw new Error('Gemini 免費額度已用完，請稍後再試');
-  }
   if (status !== 200) {
-    throw new Error('Gemini API 錯誤 ' + status + '：' + res.getContentText().slice(0, 500));
+    console.error('Gemini API 錯誤 ' + status + '：' + res.getContentText().slice(0, 1000));
+    if (status === 429) throw new Error('Gemini 免費額度已用完');
+    if (status >= 500) throw new Error('Gemini 暫時忙線');
+    throw new Error('Gemini API 錯誤 ' + status + '（請檢查 GEMINI_API_KEY 或 GEMINI_MODEL）');
   }
 
   var data = JSON.parse(res.getContentText());
