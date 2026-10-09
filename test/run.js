@@ -122,6 +122,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
         if (url.startsWith('https://generativelanguage.googleapis.com/')) {
           geminiRequests.push({ url, headers: opts.headers, body: JSON.parse(opts.payload) });
           const status = geminiStatuses.shift();
+          if (status && typeof status === 'object') return response(status.code, { error: { message: status.message } });
           if (status) return response(status, { error: { message: 'busy' } });
           const reply = claudeReplies.shift();
           return response(200, {
@@ -319,6 +320,22 @@ test('設定 GEMINI_API_KEY 時改用 Gemini', () => {
   assert.deepStrictEqual(req.body.contents[0].parts, [{ text: '午餐 120' }]);
   assert.strictEqual(env.geminiRequests[1].body.contents[0].parts[0].inlineData.mimeType, 'image/jpeg');
   assert.deepStrictEqual(env.rows.slice(1).map((r) => r[3]), ['午餐', '全聯']);
+});
+
+test('Gemini 關閉思考以加快回覆；模型不支援時自動改回預設', () => {
+  const rec = (item) => ({ intent: 'record', entries: [{ date: '2026-10-09', category: '餐飲', item, amount: 100, note: '' }], query: noQuery });
+  const env = createEnv([rec('午餐'), rec('晚餐'), rec('宵夜')], { GEMINI_API_KEY: 'g' });
+  env.post({ type: 'text', id: '1', text: '午餐 100' });
+  assert.deepStrictEqual(env.geminiRequests[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+
+  // 模型不能關閉思考 → 不帶 thinkingConfig 重送，照樣記帳，之後也不再帶
+  env.geminiStatuses.push({ code: 400, message: 'Budget 0 is invalid. This model only works in thinking mode.' });
+  env.post({ type: 'text', id: '2', text: '晚餐 100' });
+  assert.strictEqual(env.geminiRequests.length, 3);
+  assert.strictEqual(env.geminiRequests[2].body.generationConfig.thinkingConfig, undefined);
+  env.post({ type: 'text', id: '3', text: '宵夜 100' });
+  assert.strictEqual(env.geminiRequests[3].body.generationConfig.thinkingConfig, undefined);
+  assert.deepStrictEqual(env.rows.slice(1).map((r) => r[3]), ['午餐', '晚餐', '宵夜']);
 });
 
 test('AI_PROVIDER=claude 時即使有 Gemini 金鑰也用 Claude', () => {

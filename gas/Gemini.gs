@@ -44,18 +44,33 @@ function parseWithGemini_(input, today) {
   };
 
   var model = getProp_('GEMINI_MODEL', false) || GEMINI_DEFAULT_MODEL;
-  var res = fetchWithRetry_(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
-    {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': getProp_('GEMINI_API_KEY', true) },
-      payload: JSON.stringify(body),
-      muteHttpExceptions: true
-    }
-  );
+  var cache = CacheService.getScriptCache();
+  var noThinkKey = 'gemini-thinking-required:' + model;
+  // 記帳是簡單的格式轉換，不需要模型先「思考」；關掉思考通常能快好幾秒
+  if (!cache.get(noThinkKey)) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
 
+  var send = function () {
+    return fetchWithRetry_(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
+      {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-goog-api-key': getProp_('GEMINI_API_KEY', true) },
+        payload: JSON.stringify(body),
+        muteHttpExceptions: true
+      }
+    );
+  };
+  var res = send();
   var status = res.getResponseCode();
+  // 有些模型不能關掉思考：記住這件事（6 小時），改用預設設定重送
+  if (status === 400 && body.generationConfig.thinkingConfig && /thinking/i.test(res.getContentText())) {
+    console.warn('Gemini 模型 ' + model + ' 不支援關閉思考，改用預設設定');
+    cache.put(noThinkKey, '1', 6 * 60 * 60);
+    delete body.generationConfig.thinkingConfig;
+    res = send();
+    status = res.getResponseCode();
+  }
   if (status !== 200) {
     console.error('Gemini API 錯誤 ' + status + '：' + res.getContentText().slice(0, 1000));
     if (status === 429) throw new Error('Gemini 免費額度已用完');
