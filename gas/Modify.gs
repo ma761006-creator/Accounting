@@ -21,6 +21,9 @@
 function parseModifyCommand_(text, today) {
   var t = normalizeText_(text);
 
+  // 「重複記帳了，刪除」「刪除重複」：刪掉自己最近重複的那筆
+  if (/重複|重覆|記兩次|記了兩次/.test(t) && /刪|移除|取消|撤銷/.test(t)) return { action: 'dedupe' };
+
   // 「取消」只能單獨使用；指定刪除哪筆要用「刪除」，避免「取消聚餐」這種聊天誤刪
   if (t === '取消') return { action: 'delete', keyword: '', date: '', amount: null };
   var del = t.match(/^刪除\s*(.*)$/);
@@ -155,9 +158,54 @@ function notFound_(target) {
   return '找不到你記的「' + desc + '」。\n只能修改或刪除自己記的帳；其他人記的可以到試算表直接改。';
 }
 
+/**
+ * 刪除自己最近重複的帳：在自己最近 20 筆裡，日期、品項、金額都相同的只留第一筆。
+ * 找不到完全相同的，再看同一天、同金額的（例如照片辨識出的品項名稱略有不同）。
+ */
+function deleteDuplicates_(userId) {
+  var sheet = getLedgerSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var values = sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+  var dateOf = function (v) {
+    return v instanceof Date ? Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd') : String(v);
+  };
+  var mine = [];
+  for (var i = values.length - 1; i >= 0 && mine.length < 20; i--) {
+    if (values[i][COL.userId] === userId) mine.unshift({ row: i + 2, values: values[i] });
+  }
+  var findDups = function (keyOf) {
+    var seen = {};
+    return mine.filter(function (x) {
+      var key = keyOf(x.values);
+      if (seen[key]) return true;
+      seen[key] = true;
+      return false;
+    });
+  };
+  var dups = findDups(function (r) {
+    return dateOf(r[COL.date]) + '|' + r[COL.item] + '|' + Number(r[COL.amount]);
+  });
+  if (!dups.length) {
+    dups = findDups(function (r) {
+      return dateOf(r[COL.date]) + '|' + Number(r[COL.amount]);
+    });
+  }
+  // 由下往上刪，列號才不會跑掉
+  for (var j = dups.length - 1; j >= 0; j--) sheet.deleteRow(dups[j].row);
+  return dups;
+}
+
 /** 執行修改或刪除，回傳回覆文字。 */
 function applyModifyCommand_(cmd, userId) {
   if (cmd.action === 'invalid') return cmd.usage;
+  if (cmd.action === 'dedupe') {
+    var removed = deleteDuplicates_(userId);
+    if (!removed.length) return '你最近記的帳沒有重複的。\n要刪最近一筆請傳「刪除」，指定哪一筆例如「刪除 健身房」。';
+    return '🗑️ 已刪除重複的 ' + removed.length + ' 筆（保留第一筆）：\n' + removed.map(function (x) {
+      return '・' + describeRow_(x.values);
+    }).join('\n');
+  }
   var found = findTargetRows_(userId, cmd);
   if (found.rows.length === 0) {
     var isRecurring = cmd.action === 'delete' && cmd.keyword && listRecurringItems_().some(function (item) {
@@ -214,6 +262,7 @@ function modifyUsage_() {
     '刪除的用法：',
     '・刪除 → 最近一次記的帳',
     '・刪除 午餐 → 最近一筆「午餐」',
-    '・刪除 昨天 停車 60 → 指定日期、品項、金額'
+    '・刪除 昨天 停車 60 → 指定日期、品項、金額',
+    '・刪除重複 → 重複記到的帳只留一筆'
   ].join('\n');
 }

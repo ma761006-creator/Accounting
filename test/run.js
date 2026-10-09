@@ -546,6 +546,29 @@ test('照片下載失敗時回覆好懂的訊息，不顯示錯誤代碼', () =>
   assert.strictEqual(env.rows.length, 0);
 });
 
+test('刪除重複：自然的說法不經過 AI，重複的只留第一筆', () => {
+  const env = createEnv([]);
+  env.context.appendEntries_([{ date: '2026-10-09', category: '其他', item: '健身房', amount: 1500, note: '' }], { recorder: '爸爸', userId: 'Udad', messageId: 'm1', source: '收據照片' });
+  env.context.appendEntries_([{ date: '2026-10-09', category: '其他', item: '健身房月費', amount: 1500, note: '' }], { recorder: '爸爸', userId: 'Udad', messageId: 'm2', source: '收據照片' });
+  env.context.appendEntries_([{ date: '2026-10-09', category: '餐飲', item: '午餐', amount: 120, note: '' }], { recorder: '爸爸', userId: 'Udad', messageId: 'm3', source: '文字' });
+  env.post({ type: 'text', id: '1', text: '這是健身房的發票，重複記帳了，刪除' });
+  assert.strictEqual(env.claudeRequests.length, 0);
+  assert.match(env.replies[0], /已刪除重複的 1 筆/);
+  assert.deepStrictEqual(env.rows.slice(1).map((r) => r[3]), ['健身房', '午餐']);
+  env.post({ type: 'text', id: '2', text: '刪除重複' });
+  assert.match(env.replies[1], /沒有重複/);
+  assert.strictEqual(env.rows.length, 3);
+});
+
+test('照片辨識：同一張發票重複的品項或總計不會記兩次', () => {
+  const dedupe = (list) => env.context.dedupeReceiptEntries_(list.map(([item, amount]) => ({ item, amount }))).map((e) => e.item + e.amount).join(',');
+  const env = createEnv([]);
+  assert.strictEqual(dedupe([['健身房月費', 1500], ['總計', 1500]]), '健身房月費1500');
+  assert.strictEqual(dedupe([['健身房', 1500], ['健身房', 1500]]), '健身房1500');
+  assert.strictEqual(dedupe([['衛生紙', 300], ['洗衣精', 200], ['合計', 500]]), '衛生紙300,洗衣精200');
+  assert.strictEqual(dedupe([['午餐', 120], ['飲料', 60]]), '午餐120,飲料60');
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
