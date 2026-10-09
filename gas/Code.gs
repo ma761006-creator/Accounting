@@ -76,11 +76,20 @@ function doPost(e) {
     } catch (err) {
       console.error(err && err.stack ? err.stack : err);
       if (event.replyToken) {
-        replyText_(event.replyToken, '⚠️ 處理失敗，請稍後再試一次。\n（' + String(err.message || err).slice(0, 200) + '）');
+        replyText_(event.replyToken, friendlyError_(err, event));
       }
     }
   });
   return ok_();
+}
+
+function friendlyError_(err, event) {
+  var msg = String((err && err.message) || err);
+  var isImage = event.message && event.message.type === 'image';
+  if (/忙線|額度/.test(msg)) {
+    return '⏳ ' + msg + '，' + (isImage ? '照片暫時無法辨識，請稍後再傳一次，或先用文字記帳，例如「全聯 560」。' : '請稍後再試一次。');
+  }
+  return '⚠️ 處理失敗，請稍後再試一次。\n（' + msg.slice(0, 200) + '）';
 }
 
 function ok_() {
@@ -134,6 +143,7 @@ function handleEvent_(event) {
     }
     input = { text: text };
   } else if (message.type === 'image') {
+    // 照片只能靠 AI 辨識；AI 忙線時請家人稍後再傳
     if (getProvider_() === 'rules') {
       // 沒有 AI 無法讀收據；群組裡家人分享照片很常見，只在私訊提示
       if (!isGroup) {
@@ -145,6 +155,7 @@ function handleEvent_(event) {
   } else {
     return;
   }
+
 
   var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
   var parsed = parseMessage_(input, today);
@@ -186,7 +197,11 @@ function handleEvent_(event) {
 
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
-    var hint = getProvider_() === 'rules' ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
+    var hint = getProvider_() === 'rules' || parsed.aiError ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
+    if (parsed.aiError) {
+      replyText_(event.replyToken, '⏳ AI 暫時忙線，這則看不出要記帳還是查詢。' + hint + '\n也可以稍後再傳一次。');
+      return;
+    }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
 }

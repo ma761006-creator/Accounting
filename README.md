@@ -193,6 +193,8 @@ GitHub 專案頁面 **Actions → 部署到 Apps Script → Run workflow**。跑
 | `AI_PROVIDER` | （選填）`rules`、`gemini` 或 `claude`，強制指定解析方式 |
 | `GEMINI_MODEL` | （選填）Gemini 模型名稱，預設 `gemini-flash-latest` |
 
+AI 忙線（例如 Gemini 回 503「high demand」）或額度用完時，會自動重試兩次；仍然失敗的話，文字訊息改用免費的規則辨識，`午餐 120` 這類格式照樣能記帳，照片則請家人稍後再傳。如果常常忙線，可以在 `GEMINI_MODEL` 改用其他模型。
+
 ## 開發
 
 程式原始檔在 `gas/`，`dist/家庭記帳.gs` 是合併後的單一檔案。修改 `gas/` 後要重新產生：

@@ -709,6 +709,35 @@ test('分析：規則模式的指令與 AI 意圖', () => {
   assert.ok(ai.geminiRequests[0].body.generationConfig.responseSchema.properties.intent.enum.includes('analysis'));
 });
 
+test('Gemini 一直忙線（503）：文字改用規則辨識，照片和聊天回覆友善訊息', () => {
+  const env = createEnv([], { GEMINI_API_KEY: 'gm' });
+  const busy = () => env.geminiStatuses.push(503, 503, 503);
+
+  busy();
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  assert.strictEqual(env.geminiRequests.length, 3); // 第一次 + 重試兩次
+  assert.strictEqual(env.rows[1][3], '午餐');
+  assert.match(env.replies[0], /已記帳/);
+
+  busy();
+  env.post({ type: 'text', id: '2', text: '你好' }, { type: 'user', userId: 'Udad' });
+  assert.match(env.replies[1], /AI 暫時忙線/);
+  assert.match(env.replies[1], /品項 金額/);
+
+  busy();
+  env.post({ type: 'text', id: '3', text: '晚上吃什麼' }); // 群組閒聊仍然不回
+  assert.strictEqual(env.replies.length, 2);
+
+  busy();
+  env.post({ type: 'image', id: '4' });
+  assert.match(env.replies[2], /Gemini 暫時忙線，照片暫時無法辨識/);
+  assert.ok(!/"error"/.test(env.replies[2])); // 不再把原始 JSON 丟給家人
+
+  env.geminiStatuses.push(400);
+  env.post({ type: 'text', id: '5', text: '中油 1200' }); // 金鑰錯誤等其他錯誤也會退回規則辨識
+  assert.strictEqual(env.rows[2][3], '中油');
+});
+
 let failed = 0;
 for (const t of tests) {
   try {

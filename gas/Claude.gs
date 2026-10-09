@@ -40,7 +40,9 @@ function parseWithClaude_(input, today) {
 
   var status = res.getResponseCode();
   if (status !== 200) {
-    throw new Error('Claude API 錯誤 ' + status + '：' + res.getContentText().slice(0, 500));
+    console.error('Claude API 錯誤 ' + status + '：' + res.getContentText().slice(0, 1000));
+    if (status === 429 || status >= 500) throw new Error('Claude 暫時忙線');
+    throw new Error('Claude API 錯誤 ' + status + '（請檢查 ANTHROPIC_API_KEY）');
   }
 
   var data = JSON.parse(res.getContentText());
