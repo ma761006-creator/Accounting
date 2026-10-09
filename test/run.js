@@ -476,6 +476,18 @@ test('查詢回覆：關鍵字篩選與明細', () => {
   assert.ok(!/中油/.test(reply));
 });
 
+test('查詢回覆：10 筆以內直接列出明細', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post({ type: 'text', id: '2', text: '咖啡 80' });
+  env.post({ type: 'text', id: '3', text: '我今天花了多少錢' });
+  const reply = env.replies[2];
+  assert.match(reply, /總計 \$200（2 筆）/);
+  assert.match(reply, /明細：/);
+  assert.match(reply, /午餐 \$120/);
+  assert.match(reply, /咖啡 \$80/);
+});
+
 test('AI 回傳的資料會先驗證再寫入', () => {
   const env = createEnv([{
     intent: 'record',
