@@ -17,15 +17,15 @@
  * @param {Object} input  { text: string } 或 { imageBase64: string, mediaType: string }
  * @param {string} today  YYYY-MM-DD
  */
-function parseMessage(input, today) {
+function parseMessage_(input, today) {
   var provider = getProvider_();
   if (provider === 'gemini') {
-    return parseWithGemini(input, today);
+    return parseWithGemini_(input, today);
   }
   if (provider === 'claude') {
-    return parseWithClaude(input, today);
+    return parseWithClaude_(input, today);
   }
-  return parseWithRules(input.text, today);
+  return parseWithRules_(input.text, today);
 }
 
 /** @return {'rules'|'gemini'|'claude'} */

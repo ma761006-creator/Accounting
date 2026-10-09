@@ -33,7 +33,7 @@ function getDefaultKeywords_() {
   };
 }
 
-function parseWithRules(text, today) {
+function parseWithRules_(text, today) {
   var t = normalizeText_(text);
   var query = parseQuery_(t, today);
   if (query) {

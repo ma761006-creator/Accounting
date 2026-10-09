@@ -60,7 +60,7 @@ function doPost(e) {
     } catch (err) {
       console.error(err && err.stack ? err.stack : err);
       if (event.replyToken) {
-        replyText(event.replyToken, '⚠️ 處理失敗，請稍後再試一次。\n（' + String(err.message || err).slice(0, 200) + '）');
+        replyText_(event.replyToken, '⚠️ 處理失敗，請稍後再試一次。\n（' + String(err.message || err).slice(0, 200) + '）');
       }
     }
   });
@@ -76,7 +76,7 @@ function handleEvent_(event) {
   if (event.webhookEventId && isDuplicate_(event.webhookEventId)) return;
 
   if (event.type === 'join' || event.type === 'follow') {
-    replyText(event.replyToken, helpText_());
+    replyText_(event.replyToken, helpText_());
     return;
   }
   if (event.type !== 'message') return;
@@ -88,11 +88,11 @@ function handleEvent_(event) {
   if (message.type === 'text') {
     var text = message.text.trim();
     if (text === '說明' || text === '幫助' || text.toLowerCase() === 'help') {
-      replyText(event.replyToken, helpText_());
+      replyText_(event.replyToken, helpText_());
       return;
     }
     if (text === '刪除' || text === '取消') {
-      replyText(event.replyToken, handleDelete_(event.source.userId));
+      replyText_(event.replyToken, handleDelete_(event.source.userId));
       return;
     }
     input = { text: text };
@@ -100,51 +100,51 @@ function handleEvent_(event) {
     if (getProvider_() === 'rules') {
       // 沒有 AI 無法讀收據；群組裡家人分享照片很常見，只在私訊提示
       if (!isGroup) {
-        replyText(event.replyToken, '目前沒有開啟 AI，無法辨識收據照片。\n請用文字記帳，例如「全聯 560」。');
+        replyText_(event.replyToken, '目前沒有開啟 AI，無法辨識收據照片。\n請用文字記帳，例如「全聯 560」。');
       }
       return;
     }
-    input = getImageContent(message.id);
+    input = getImageContent_(message.id);
   } else {
     return;
   }
 
   var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-  var parsed = parseMessage(input, today);
+  var parsed = parseMessage_(input, today);
   parsed.entries = parsed.entries.filter(function (e) {
     return e.amount > 0;
   });
 
   if (parsed.intent === 'record' && parsed.entries.length > 0) {
-    var recorder = getDisplayName(event.source);
+    var recorder = getDisplayName_(event.source);
     withLock_(function () {
-      appendEntries(parsed.entries, {
+      appendEntries_(parsed.entries, {
         recorder: recorder,
         userId: event.source.userId,
         messageId: message.id,
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
-    replyText(event.replyToken, formatRecorded_(parsed.entries, recorder));
+    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder));
     return;
   }
 
   if (parsed.intent === 'query') {
     var q = parsed.query;
-    replyText(event.replyToken, formatSummary_(q, summarize(q.start_date, q.end_date, q.category)));
+    replyText_(event.replyToken, formatSummary_(q, summarize_(q.start_date, q.end_date, q.category)));
     return;
   }
 
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
     var hint = getProvider_() === 'rules' ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
-    replyText(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
+    replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
 }
 
 function handleDelete_(userId) {
   var deleted = withLock_(function () {
-    return deleteLastEntry(userId);
+    return deleteLastEntry_(userId);
   });
   if (deleted.length === 0) {
     return '找不到你可以刪除的紀錄。';

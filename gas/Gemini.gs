@@ -25,7 +25,7 @@ function toGeminiSchema_(schema) {
   return out;
 }
 
-function parseWithGemini(input, today) {
+function parseWithGemini_(input, today) {
   var parts = [];
   if (input.imageBase64) {
     parts.push({ inlineData: { mimeType: input.mediaType, data: input.imageBase64 } });

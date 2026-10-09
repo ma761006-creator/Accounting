@@ -4,7 +4,7 @@
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
 
-function parseWithClaude(input, today) {
+function parseWithClaude_(input, today) {
   var content = [];
   if (input.imageBase64) {
     content.push({

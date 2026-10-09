@@ -79,7 +79,7 @@ function getLedgerSheet_() {
  * @param {Array} entries  Claude 解析出的 entries
  * @param {Object} meta    { recorder, userId, messageId, source }
  */
-function appendEntries(entries, meta) {
+function appendEntries_(entries, meta) {
   var sheet = getLedgerSheet_();
   var now = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd HH:mm:ss');
   entries.forEach(function (e) {
@@ -120,7 +120,7 @@ function readRows_() {
  * 統計區間內的花費。
  * @return {{ total: number, count: number, byCategory: Object, byRecorder: Object }}
  */
-function summarize(startDate, endDate, category) {
+function summarize_(startDate, endDate, category) {
   var result = { total: 0, count: 0, byCategory: {}, byRecorder: {} };
   readRows_().forEach(function (r) {
     var date = r[COL.date];
@@ -139,7 +139,7 @@ function summarize(startDate, endDate, category) {
  * 刪除這位使用者最近一次記帳（同一則訊息記下的多筆會一起刪除）。
  * @return {Array} 被刪除的資料列；沒有可刪的則回傳空陣列
  */
-function deleteLastEntry(userId) {
+function deleteLastEntry_(userId) {
   var sheet = getLedgerSheet_();
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
@@ -179,7 +179,7 @@ function lineFetch_(url, options) {
   return UrlFetchApp.fetch(url, options);
 }
 
-function replyText(replyToken, text) {
+function replyText_(replyToken, text) {
   var res = lineFetch_('https://api.line.me/v2/bot/message/reply', {
     method: 'post',
     contentType: 'application/json',
@@ -195,7 +195,7 @@ function replyText(replyToken, text) {
 }
 
 /** 取得使用者顯示名稱，快取 6 小時。 */
-function getDisplayName(source) {
+function getDisplayName_(source) {
   var userId = source.userId;
   if (!userId) return '（未知）';
 
@@ -223,7 +223,7 @@ function getDisplayName(source) {
 }
 
 /** 下載使用者傳來的圖片，回傳 { imageBase64, mediaType }。 */
-function getImageContent(messageId) {
+function getImageContent_(messageId) {
   var res = lineFetch_('https://api-data.line.me/v2/bot/message/' + messageId + '/content', {
     method: 'get'
   });
@@ -274,7 +274,7 @@ function getDefaultKeywords_() {
   };
 }
 
-function parseWithRules(text, today) {
+function parseWithRules_(text, today) {
   var t = normalizeText_(text);
   var query = parseQuery_(t, today);
   if (query) {
@@ -519,15 +519,15 @@ function startOfWeek_(ymd) {
  * @param {Object} input  { text: string } 或 { imageBase64: string, mediaType: string }
  * @param {string} today  YYYY-MM-DD
  */
-function parseMessage(input, today) {
+function parseMessage_(input, today) {
   var provider = getProvider_();
   if (provider === 'gemini') {
-    return parseWithGemini(input, today);
+    return parseWithGemini_(input, today);
   }
   if (provider === 'claude') {
-    return parseWithClaude(input, today);
+    return parseWithClaude_(input, today);
   }
-  return parseWithRules(input.text, today);
+  return parseWithRules_(input.text, today);
 }
 
 /** @return {'rules'|'gemini'|'claude'} */
@@ -632,7 +632,7 @@ function toGeminiSchema_(schema) {
   return out;
 }
 
-function parseWithGemini(input, today) {
+function parseWithGemini_(input, today) {
   var parts = [];
   if (input.imageBase64) {
     parts.push({ inlineData: { mimeType: input.mediaType, data: input.imageBase64 } });
@@ -698,7 +698,7 @@ function parseWithGemini(input, today) {
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
 
-function parseWithClaude(input, today) {
+function parseWithClaude_(input, today) {
   var content = [];
   if (input.imageBase64) {
     content.push({
@@ -819,7 +819,7 @@ function doPost(e) {
     } catch (err) {
       console.error(err && err.stack ? err.stack : err);
       if (event.replyToken) {
-        replyText(event.replyToken, '⚠️ 處理失敗，請稍後再試一次。\n（' + String(err.message || err).slice(0, 200) + '）');
+        replyText_(event.replyToken, '⚠️ 處理失敗，請稍後再試一次。\n（' + String(err.message || err).slice(0, 200) + '）');
       }
     }
   });
@@ -835,7 +835,7 @@ function handleEvent_(event) {
   if (event.webhookEventId && isDuplicate_(event.webhookEventId)) return;
 
   if (event.type === 'join' || event.type === 'follow') {
-    replyText(event.replyToken, helpText_());
+    replyText_(event.replyToken, helpText_());
     return;
   }
   if (event.type !== 'message') return;
@@ -847,11 +847,11 @@ function handleEvent_(event) {
   if (message.type === 'text') {
     var text = message.text.trim();
     if (text === '說明' || text === '幫助' || text.toLowerCase() === 'help') {
-      replyText(event.replyToken, helpText_());
+      replyText_(event.replyToken, helpText_());
       return;
     }
     if (text === '刪除' || text === '取消') {
-      replyText(event.replyToken, handleDelete_(event.source.userId));
+      replyText_(event.replyToken, handleDelete_(event.source.userId));
       return;
     }
     input = { text: text };
@@ -859,51 +859,51 @@ function handleEvent_(event) {
     if (getProvider_() === 'rules') {
       // 沒有 AI 無法讀收據；群組裡家人分享照片很常見，只在私訊提示
       if (!isGroup) {
-        replyText(event.replyToken, '目前沒有開啟 AI，無法辨識收據照片。\n請用文字記帳，例如「全聯 560」。');
+        replyText_(event.replyToken, '目前沒有開啟 AI，無法辨識收據照片。\n請用文字記帳，例如「全聯 560」。');
       }
       return;
     }
-    input = getImageContent(message.id);
+    input = getImageContent_(message.id);
   } else {
     return;
   }
 
   var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-  var parsed = parseMessage(input, today);
+  var parsed = parseMessage_(input, today);
   parsed.entries = parsed.entries.filter(function (e) {
     return e.amount > 0;
   });
 
   if (parsed.intent === 'record' && parsed.entries.length > 0) {
-    var recorder = getDisplayName(event.source);
+    var recorder = getDisplayName_(event.source);
     withLock_(function () {
-      appendEntries(parsed.entries, {
+      appendEntries_(parsed.entries, {
         recorder: recorder,
         userId: event.source.userId,
         messageId: message.id,
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
-    replyText(event.replyToken, formatRecorded_(parsed.entries, recorder));
+    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder));
     return;
   }
 
   if (parsed.intent === 'query') {
     var q = parsed.query;
-    replyText(event.replyToken, formatSummary_(q, summarize(q.start_date, q.end_date, q.category)));
+    replyText_(event.replyToken, formatSummary_(q, summarize_(q.start_date, q.end_date, q.category)));
     return;
   }
 
   // 群組裡的閒聊不回應，避免洗版；私訊則提示用法
   if (!isGroup) {
     var hint = getProvider_() === 'rules' ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
-    replyText(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
+    replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
 }
 
 function handleDelete_(userId) {
   var deleted = withLock_(function () {
-    return deleteLastEntry(userId);
+    return deleteLastEntry_(userId);
   });
   if (deleted.length === 0) {
     return '找不到你可以刪除的紀錄。';

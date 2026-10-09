@@ -298,7 +298,7 @@ const RULES = { ANTHROPIC_API_KEY: '' };
 
 test('規則辨識：記帳格式、日期、關鍵字分類', () => {
   const env = createEnv([], RULES);
-  const parse = (text, today) => env.context.parseWithRules(text, today || '2026-10-09');
+  const parse = (text, today) => env.context.parseWithRules_(text, today || '2026-10-09');
   const one = (text, today) => {
     const r = parse(text, today);
     assert.strictEqual(r.intent, 'record', text);
@@ -331,14 +331,14 @@ test('規則辨識：記帳格式、日期、關鍵字分類', () => {
 test('規則辨識：聊天內容不會被誤記', () => {
   const env = createEnv([], RULES);
   ['我 3 點到', '晚上吃什麼', '午餐 120、明天見', '好', '收到！', '120'].forEach((text) => {
-    assert.strictEqual(env.context.parseWithRules(text, '2026-10-09').intent, 'other', text);
+    assert.strictEqual(env.context.parseWithRules_(text, '2026-10-09').intent, 'other', text);
   });
 });
 
 test('規則辨識：查詢期間與分類', () => {
   const env = createEnv([], RULES);
   const q = (text, today) => {
-    const r = env.context.parseWithRules(text, today || '2026-10-09');
+    const r = env.context.parseWithRules_(text, today || '2026-10-09');
     assert.strictEqual(r.intent, 'query', text);
     return [r.query.start_date, r.query.end_date, r.query.category].join('|');
   };
@@ -389,6 +389,12 @@ test('dist/家庭記帳.gs 與 gas/ 一致，且單一檔案可以正常運作',
   const env = createEnv([], RULES, [bundle.OUT]);
   env.post({ type: 'text', id: '1', text: '7-11 85' });
   assert.strictEqual(env.rows[1][2], '餐飲');
+});
+
+test('執行選單只會出現 setup 和 doPost（其他函式都以 _ 結尾隱藏）', () => {
+  const bundle = require('../scripts/bundle.js');
+  const names = [...bundle.build().matchAll(/^function ([A-Za-z0-9_]+)\(/gm)].map((m) => m[1]);
+  assert.deepStrictEqual(names.filter((n) => !n.endsWith('_')).sort(), ['doPost', 'setup']);
 });
 
 let failed = 0;

@@ -28,7 +28,7 @@ function getLedgerSheet_() {
  * @param {Array} entries  Claude 解析出的 entries
  * @param {Object} meta    { recorder, userId, messageId, source }
  */
-function appendEntries(entries, meta) {
+function appendEntries_(entries, meta) {
   var sheet = getLedgerSheet_();
   var now = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd HH:mm:ss');
   entries.forEach(function (e) {
@@ -69,7 +69,7 @@ function readRows_() {
  * 統計區間內的花費。
  * @return {{ total: number, count: number, byCategory: Object, byRecorder: Object }}
  */
-function summarize(startDate, endDate, category) {
+function summarize_(startDate, endDate, category) {
   var result = { total: 0, count: 0, byCategory: {}, byRecorder: {} };
   readRows_().forEach(function (r) {
     var date = r[COL.date];
@@ -88,7 +88,7 @@ function summarize(startDate, endDate, category) {
  * 刪除這位使用者最近一次記帳（同一則訊息記下的多筆會一起刪除）。
  * @return {Array} 被刪除的資料列；沒有可刪的則回傳空陣列
  */
-function deleteLastEntry(userId) {
+function deleteLastEntry_(userId) {
   var sheet = getLedgerSheet_();
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];

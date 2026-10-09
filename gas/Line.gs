@@ -10,7 +10,7 @@ function lineFetch_(url, options) {
   return UrlFetchApp.fetch(url, options);
 }
 
-function replyText(replyToken, text) {
+function replyText_(replyToken, text) {
   var res = lineFetch_('https://api.line.me/v2/bot/message/reply', {
     method: 'post',
     contentType: 'application/json',
@@ -26,7 +26,7 @@ function replyText(replyToken, text) {
 }
 
 /** 取得使用者顯示名稱，快取 6 小時。 */
-function getDisplayName(source) {
+function getDisplayName_(source) {
   var userId = source.userId;
   if (!userId) return '（未知）';
 
@@ -54,7 +54,7 @@ function getDisplayName(source) {
 }
 
 /** 下載使用者傳來的圖片，回傳 { imageBase64, mediaType }。 */
-function getImageContent(messageId) {
+function getImageContent_(messageId) {
   var res = lineFetch_('https://api-data.line.me/v2/bot/message/' + messageId + '/content', {
     method: 'get'
   });
