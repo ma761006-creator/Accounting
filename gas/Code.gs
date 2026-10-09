@@ -22,6 +22,7 @@ function helpText_() {
       '・加「明細」列出每一筆：「本月 明細」',
       '',
       '固定支出：傳「固定支出」查看房租、水電等',
+      '・新增或修改：固定支出 Netflix 390 每月15號',
       '',
       '刪除：傳「刪除」會刪掉你最近一次記的帳',
       '',
@@ -44,6 +45,7 @@ function helpText_() {
     '・本月明細',
     '',
     '固定支出：傳「固定支出」查看房租、水電等',
+    '・新增：我每個月訂 Netflix 390，15 號扣款',
     '',
     '刪除：傳「刪除」會刪掉你最近一次記的帳',
     '',
@@ -106,8 +108,17 @@ function handleEvent_(event) {
       replyText_(event.replyToken, helpText_());
       return;
     }
-    if (text === '固定支出') {
-      replyText_(event.replyToken, formatRecurringList_());
+    var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+    var recurringCmd = parseRecurringCommand_(text);
+    if (recurringCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyRecurringCommand_(recurringCmd, today0);
+      }));
+      return;
+    }
+    var recurringName = matchRecurringQuestion_(text);
+    if (recurringName !== null) {
+      replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
     if (text === '刪除' || text === '取消') {
@@ -145,6 +156,13 @@ function handleEvent_(event) {
       });
     });
     replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder));
+    return;
+  }
+
+  if (parsed.intent === 'recurring') {
+    replyText_(event.replyToken, withLock_(function () {
+      return applyRecurringCommand_(parsed.recurring, today);
+    }));
     return;
   }
 

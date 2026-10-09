@@ -25,9 +25,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -50,6 +50,15 @@ jobs:
           fi
           echo "$CLASPRC_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))' \
             || { echo "::error::CLASPRC_JSON 不是有效的 JSON，請重新複製 .clasprc.json 的完整內容"; exit 1; }
+          sid="$(echo "$SCRIPT_ID" | tr -d '[:space:]')"
+          did="$(echo "$DEPLOYMENT_ID" | tr -d '[:space:]')"
+          if [[ "$sid" == AKfy* ]]; then
+            echo "::error::SCRIPT_ID 看起來是部署作業 ID（AKfy 開頭）。SCRIPT_ID 要填 Apps Script「專案設定 → 指令碼 ID」"; exit 1
+          fi
+          if [[ "$did" != AKfy* ]]; then
+            echo "::error::DEPLOYMENT_ID 應該是 AKfy 開頭（網頁應用程式網址 /s/ 和 /exec 中間那段），請檢查是否和 SCRIPT_ID 填反"; exit 1
+          fi
+          echo "SCRIPT_ID 長度：${#sid}（指令碼 ID 通常約 57 字元；若是 44 字元，可能填成了試算表 ID）"
 
       - name: 安裝 clasp
         run: npm install -g @google/clasp@3.4.1
@@ -65,6 +74,45 @@ jobs:
 
       - name: 上傳程式碼
         run: clasp push --force
+
+      # clasp 只會顯示「Request contains an invalid argument」，這一步直接問 Apps Script API 拿詳細原因。
+      # 只印出 API 回傳的錯誤訊息，不會印出任何金鑰。
+      - name: 診斷（上傳失敗時）
+        if: failure()
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          token=$(echo "$CLASPRC_JSON" | node -e '
+            const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const t = (c.tokens && (c.tokens.default || Object.values(c.tokens)[0])) || c.token || c;
+            const body = new URLSearchParams({ client_id: t.client_id || (c.oauth2ClientSettings || {}).clientId,
+              client_secret: t.client_secret || (c.oauth2ClientSettings || {}).clientSecret,
+              refresh_token: t.refresh_token, grant_type: "refresh_token" });
+            fetch("https://oauth2.googleapis.com/token", { method: "POST", body })
+              .then((r) => r.json()).then((j) => {
+                if (!j.access_token) { console.error("無法用 refresh_token 取得授權：" + (j.error_description || j.error)); process.exit(1); }
+                process.stdout.write(j.access_token);
+              });
+          ') || { echo "::error::CLASPRC_JSON 的授權已失效或被移除，請重新執行 clasp login 並更新 Secret"; exit 0; }
+          echo "::add-mask::$token"
+          sid="$(echo "$SCRIPT_ID" | tr -d '[:space:]')"
+          echo "== 讀取專案（檢查 SCRIPT_ID 是否正確）=="
+          curl -sS -H "Authorization: Bearer $token" "https://script.googleapis.com/v1/projects/$sid" \
+            | node -e 'const j = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(j.error ? JSON.stringify(j.error, null, 2) : "OK：找到專案「" + j.title + "」")'
+          echo "== 用目前的 dist/ 試著上傳，顯示詳細錯誤 =="
+          node -e '
+            const fs = require("fs");
+            const files = [
+              { name: "appsscript", type: "JSON", source: fs.readFileSync("dist/appsscript.json", "utf8") },
+              { name: "家庭記帳", type: "SERVER_JS", source: fs.readFileSync("dist/家庭記帳.gs", "utf8") }
+            ];
+            process.stdout.write(JSON.stringify({ files }));
+          ' > /tmp/content.json
+          curl -sS -X PUT -H "Authorization: Bearer $token" -H "Content-Type: application/json" \
+            --data-binary @/tmp/content.json "https://script.googleapis.com/v1/projects/$sid/content" \
+            | node -e 'const j = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(j.error ? JSON.stringify(j.error, null, 2) : "上傳成功（代表問題在 clasp 設定）")'
+          rm -f /tmp/content.json
 
       - name: 更新網頁應用程式部署
         env:
