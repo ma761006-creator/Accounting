@@ -107,6 +107,60 @@ LINE 現在不能直接在 LINE Developers 建立 Messaging API channel，要**�
 - **記錄人**會自動抓 LINE 顯示名稱。
 - 試算表可以直接修改。改分類、金額都沒問題，查詢會以試算表的內容為準。
 
+## 自動部署（選用）
+
+設定好之後，GitHub 上的程式碼**合併到 `main` 就會自動更新 Apps Script 並重新部署**，網址不變，不用再複製貼上。以下是一次性的設定：
+
+### 1. 開啟 Apps Script API
+
+打開 <https://script.google.com/home/usersettings>，把「Google Apps Script API」切換成**開啟**。
+
+### 2. 取得 clasp 授權（`.clasprc.json`）
+
+**有電腦（已安裝 Node.js）：**
+
+```bash
+npx @google/clasp@3.4.1 login
+```
+
+瀏覽器會開啟 Google 登入，選你的帳號並允許。完成後，授權檔在：
+- Mac：`~/.clasprc.json`（終端機執行 `cat ~/.clasprc.json` 顯示內容）
+- Windows：`C:\Users\你的名字\.clasprc.json`（用記事本打開）
+
+**只有 iPad：用 GitHub Codespaces（瀏覽器裡的電腦）**
+
+1. 在本專案 GitHub 頁面按綠色 **Code → Codespaces → Create codespace on main**。
+2. 下方終端機輸入：`npx @google/clasp@3.4.1 login --no-localhost`
+3. 打開它顯示的網址，選你的帳號並允許。
+4. 最後瀏覽器會跳到一個**打不開的 localhost 網頁，這是正常的**。把網址列的**完整網址**複製起來，貼回終端機按 Enter。
+5. 輸入 `cat ~/.clasprc.json`，複製顯示的全部內容。
+6. 完成後到 <https://github.com/codespaces> 把這個 Codespace 刪掉。
+
+### 3. 找到兩個 ID
+
+- **指令碼 ID**：Apps Script 左側 **⚙️ 專案設定 → 指令碼 ID**。
+- **部署作業 ID**：**部署 → 管理部署作業**，選目前的網頁應用程式，複製「部署作業 ID」。它也是網頁應用程式網址中 `/s/` 和 `/exec` 之間的那一段。
+
+### 4. 存到 GitHub Secrets
+
+GitHub 專案頁面 **Settings → Secrets and variables → Actions → New repository secret**，新增三個：
+
+| Name | Secret |
+|---|---|
+| `CLASPRC_JSON` | 第 2 步 `.clasprc.json` 的完整內容 |
+| `SCRIPT_ID` | 指令碼 ID |
+| `DEPLOYMENT_ID` | 部署作業 ID |
+
+### 5. 測試
+
+GitHub 專案頁面 **Actions → 部署到 Apps Script → Run workflow**。跑完是綠色勾勾，就代表 Apps Script 已更新。第一次自動部署後，Apps Script 裡的檔案會變成 `家庭記帳.gs`，原本的 `程式碼.gs` 會被取代，這是正常的。
+
+### 注意
+
+- `CLASPRC_JSON` 可以修改你 Google 帳號裡**所有** Apps Script 專案，**只能放在 GitHub Secrets**，不要貼到其他地方。不想用了可以到 <https://myaccount.google.com/permissions> 移除「clasp」的存取權。
+- 如果新功能需要新的權限（例如第一次加入每日排程），自動部署後還是要到 Apps Script **手動執行一次 `setup`** 完成授權。需要時我會特別提醒。
+- 自動部署只會部署 `main`。PR 上會自動跑測試，但不會部署。
+
 ## 進階：改用 AI 解析（選用）
 
 設定 AI 金鑰後，可以隨口說（`昨天全聯買衛生紙花了 560`）、拍收據照片記帳，也能用自然語句查詢。在「指令碼屬性」新增其中一個即可，不用重新部署：

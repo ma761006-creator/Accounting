@@ -411,6 +411,7 @@ test('規則模式：試算表「關鍵字」工作表優先於內建關鍵字',
 test('dist/家庭記帳.gs 與 gas/ 一致，且單一檔案可以正常運作', () => {
   const bundle = require('../scripts/bundle.js');
   assert.strictEqual(fs.readFileSync(bundle.OUT, 'utf8'), bundle.build(), '請執行 node scripts/bundle.js');
+  assert.strictEqual(fs.readFileSync(bundle.MANIFEST_OUT, 'utf8'), fs.readFileSync(bundle.MANIFEST_SRC, 'utf8'), '請執行 node scripts/bundle.js');
   const env = createEnv([], RULES, [bundle.OUT]);
   env.post({ type: 'text', id: '1', text: '7-11 85' });
   assert.strictEqual(env.rows[1][2], '餐飲');
