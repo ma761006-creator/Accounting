@@ -35,6 +35,10 @@ function getDefaultKeywords_() {
 
 function parseWithRules_(text, today) {
   var t = normalizeText_(text);
+  var analysis = parseAnalysis_(t, today);
+  if (analysis) {
+    return { intent: 'analysis', entries: [], query: analysis };
+  }
   var query = parseQuery_(t, today);
   if (query) {
     return { intent: 'query', entries: [], query: query };

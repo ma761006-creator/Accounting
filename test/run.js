@@ -154,7 +154,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs']
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs']
     .map((f) => path.join(dir, f));
   files.forEach((f) => {
     vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
@@ -628,6 +628,85 @@ test('固定支出：AI 自然語句新增', () => {
   assert.match(env.replies[0], /✅ 已新增固定支出/);
   const schema = env.geminiRequests[0].body.generationConfig.responseSchema;
   assert.ok(schema.properties.intent.enum.includes('recurring'));
+});
+
+test('分析：比較期間', () => {
+  const env = createEnv([], RULES);
+  const p = (a, b) => env.context.previousPeriod_(a, b).join('~');
+  assert.strictEqual(p('2026-10-01', '2026-10-09'), '2026-09-01~2026-09-09');
+  assert.strictEqual(p('2026-10-01', '2026-10-31'), '2026-09-01~2026-09-30');
+  assert.strictEqual(p('2026-03-01', '2026-03-31'), '2026-02-01~2026-02-28');
+  assert.strictEqual(p('2026-01-01', '2026-01-09'), '2025-12-01~2025-12-09');
+  assert.strictEqual(p('2026-10-05', '2026-10-09'), '2026-09-30~2026-10-04');
+});
+
+test('分析：總支出、平均、最大支出、和上月同期比較、固定支出分開', () => {
+  const env = createEnv([], RULES);
+  const add = (date, category, item, amount, recorder, source) =>
+    env.context.appendEntries_([{ date, category, item, amount, note: '' }],
+      { recorder, userId: 'U', messageId: date + item, source: source || '文字' });
+  add('2026-09-03', '餐飲', '午餐', 3000, '爸爸');
+  add('2026-09-05', '交通', '加油', 2100, '爸爸');
+  add('2026-09-20', '餐飲', '聚餐', 9999, '爸爸'); // 不在上月同期
+  add('2026-10-02', '餐飲', '午餐', 3000, '爸爸');
+  add('2026-10-03', '交通', '中油', 1800, '爸爸');
+  add('2026-10-04', '餐飲', '晚餐', 2200, '媽媽');
+  add('2026-10-06', '日用品', '全聯', 1450, '媽媽');
+  add('2026-10-05', '其他', '房租', 15000, '🔁 固定支出', '固定支出');
+
+  const text = env.context.formatAnalysis_(env.context.analyze_('2026-10-01', '2026-10-09', '2026-10-09'));
+  const expect = [
+    '📊 消費分析（10/1～10/9）',
+    '💵 總支出 $23,450（日常 $8,450＋固定支出 $15,000）',
+    '📅 日常花費平均每天 $939（9 天）',
+    '📈 日常花費比上月同期（9/1～9/9）多 $3,350（+66%）',
+    '🔥 最大支出：餐飲 $5,200（62%）',
+    '💡 餐飲占了日常花費的6成左右，是主要的花費來源。',
+    '📌 餐飲比上月同期多 $2,200，是增加最多的項目',
+    '・餐飲 $5,200（62%） ▲ +$2,200',
+    '・交通 $1,800（21%） ▼ -$300',
+    '・日用品 $1,450（17%） ▲ +$1,450',
+    '・房租 $15,000',
+    '・爸爸 $4,800',
+    '・媽媽 $3,650'
+  ];
+  expect.forEach((line) => assert.ok(text.includes(line), '缺少：' + line + '\n' + text));
+  assert.ok(text.indexOf('・爸爸') < text.indexOf('・媽媽'));
+
+  // 上一期沒有資料：不算百分比
+  const none = env.context.formatAnalysis_(env.context.analyze_('2026-09-03', '2026-09-05', '2026-10-09'));
+  assert.match(none, /前一段時間（8\/31～9\/2）沒有日常花費紀錄，還無法比較/);
+  assert.ok(!/增加最多/.test(none));
+  assert.ok(!/[▲▼]/.test(none));
+
+  const empty = env.context.formatAnalysis_(env.context.analyze_('2026-08-01', '2026-08-31', '2026-10-09'));
+  assert.match(empty, /這段期間沒有紀錄/);
+});
+
+test('分析：規則模式的指令與 AI 意圖', () => {
+  const env = createEnv([], RULES);
+  const a = (t) => {
+    const r = env.context.parseWithRules_(t, '2026-10-09');
+    return r.intent === 'analysis' ? r.query.start_date + '~' + r.query.end_date : r.intent;
+  };
+  assert.strictEqual(a('分析'), '2026-10-01~2026-10-09');
+  assert.strictEqual(a('本月分析'), '2026-10-01~2026-10-09');
+  assert.strictEqual(a('上月分析'), '2026-09-01~2026-09-30');
+  assert.strictEqual(a('幫我分析這個月的消費'), '2026-10-01~2026-10-09');
+  assert.strictEqual(a('本週分析'), '2026-10-05~2026-10-09');
+  assert.strictEqual(a('全聯分析'), 'other');
+
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post({ type: 'text', id: '2', text: '分析' });
+  assert.match(env.replies[1], /^📊 消費分析/);
+  assert.match(env.replies[1], /💵 總支出 \$120/);
+
+  const ai = createEnv([{
+    intent: 'analysis', entries: [], query: { start_date: '2026-09-01', end_date: '2026-09-30', category: '全部', keyword: '', detail: false }
+  }], { GEMINI_API_KEY: 'gm' });
+  ai.post({ type: 'text', id: '1', text: '上個月花得比較多嗎' });
+  assert.match(ai.replies[0], /📊 消費分析（9\/1～9\/30）/);
+  assert.ok(ai.geminiRequests[0].body.generationConfig.responseSchema.properties.intent.enum.includes('analysis'));
 });
 
 let failed = 0;

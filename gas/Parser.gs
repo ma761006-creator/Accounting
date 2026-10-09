@@ -7,9 +7,9 @@
  *
  * 回傳格式：
  *   {
- *     intent: 'record' | 'query' | 'recurring' | 'other',
+ *     intent: 'record' | 'query' | 'analysis' | 'recurring' | 'other',
  *     entries: [{ date, category, item, amount, note }],   // intent = record
- *     query: { start_date, end_date, category, keyword, detail }  // intent = query
+ *     query: { start_date, end_date, category, keyword, detail }  // intent = query 或 analysis
  *     recurring: { action, name, amount, amountBlank, day, every, category }  // intent = recurring
  *   }
  */
@@ -37,7 +37,7 @@ function parseMessage_(input, today) {
  */
 function validateParsed_(parsed, today) {
   parsed = parsed || {};
-  var intent = ['record', 'query', 'recurring', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
+  var intent = ['record', 'query', 'analysis', 'recurring', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
   var isDate = function (s) {
     return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00Z'));
   };
@@ -128,7 +128,7 @@ function getParseSchema_() {
   return {
     type: 'object',
     properties: {
-      intent: { type: 'string', enum: ['record', 'query', 'recurring', 'other'] },
+      intent: { type: 'string', enum: ['record', 'query', 'analysis', 'recurring', 'other'] },
       entries: {
         type: 'array',
         items: {
@@ -195,6 +195,8 @@ function buildSystemPrompt_(today) {
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
     '  問特定店家或品項（例如「全聯花多少」「這個月 7-11」）時，把店名或品項填在 keyword，分類用「全部」；否則 keyword 為空字串。',
     '  要求列出明細、清單、每一筆時 detail 為 true，否則為 false。',
+    '- analysis：要求分析消費、看花費趨勢或和上個月比較（例如「幫我分析這個月的消費」「上個月花得比較多嗎」「本週分析」）。',
+    '  把要分析的期間填在 query 的 start_date、end_date（沒指定就用本月 1 日到今天），其他 query 欄位填預設值。',
     '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
     '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
     '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',

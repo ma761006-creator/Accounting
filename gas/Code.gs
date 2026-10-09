@@ -21,6 +21,9 @@ function helpText_() {
       '・可加分類或店名：「本月 餐飲」「全聯花多少」',
       '・加「明細」列出每一筆：「本月 明細」',
       '',
+      '分析：「分析」「上月分析」「本週分析」',
+      '・平均每天花多少、最大支出、和上個月同期比較',
+      '',
       '固定支出：傳「固定支出」查看房租、水電等',
       '・新增或修改：固定支出 Netflix 390 每月15號',
       '',
@@ -43,6 +46,10 @@ function helpText_() {
     '・上個月餐飲多少',
     '・這個月全聯花多少',
     '・本月明細',
+    '',
+    '分析：例如',
+    '・幫我分析這個月的消費',
+    '・上個月花得比較多嗎',
     '',
     '固定支出：傳「固定支出」查看房租、水電等',
     '・新增：我每個月訂 Netflix 390，15 號扣款',
@@ -163,6 +170,11 @@ function handleEvent_(event) {
     replyText_(event.replyToken, withLock_(function () {
       return applyRecurringCommand_(parsed.recurring, today);
     }));
+    return;
+  }
+
+  if (parsed.intent === 'analysis') {
+    replyText_(event.replyToken, formatAnalysis_(analyze_(parsed.query.start_date, parsed.query.end_date, today)));
     return;
   }
 
