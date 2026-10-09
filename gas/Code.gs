@@ -4,23 +4,26 @@
  * 部署成「網頁應用程式」後，把網址填到 LINE Developers 的 Webhook URL。
  */
 
-var HELP_TEXT = [
-  '📒 家庭記帳機器人',
-  '',
-  '記帳：直接傳訊息，例如',
-  '・午餐 120',
-  '・昨天全聯 560 衛生紙',
-  '・加油 1200、停車 60',
-  '・或直接拍收據 / 發票照片',
-  '',
-  '查詢：例如',
-  '・這個月花多少？',
-  '・上個月餐飲多少',
-  '',
-  '刪除：傳「刪除」會刪掉你最近一次記的帳',
-  '',
-  '分類：' + CATEGORIES.join('、')
-].join('\n');
+// 用函式而不是全域變數：Code.gs 會比 Config.gs 先載入，此時 CATEGORIES 還沒定義
+function helpText_() {
+  return [
+    '📒 家庭記帳機器人',
+    '',
+    '記帳：直接傳訊息，例如',
+    '・午餐 120',
+    '・昨天全聯 560 衛生紙',
+    '・加油 1200、停車 60',
+    '・或直接拍收據 / 發票照片',
+    '',
+    '查詢：例如',
+    '・這個月花多少？',
+    '・上個月餐飲多少',
+    '',
+    '刪除：傳「刪除」會刪掉你最近一次記的帳',
+    '',
+    '分類：' + CATEGORIES.join('、')
+  ].join('\n');
+}
 
 function doPost(e) {
   var body = JSON.parse(e.postData.contents);
@@ -54,7 +57,7 @@ function handleEvent_(event) {
   if (event.webhookEventId && isDuplicate_(event.webhookEventId)) return;
 
   if (event.type === 'join' || event.type === 'follow') {
-    replyText(event.replyToken, HELP_TEXT);
+    replyText(event.replyToken, helpText_());
     return;
   }
   if (event.type !== 'message') return;
@@ -66,7 +69,7 @@ function handleEvent_(event) {
   if (message.type === 'text') {
     var text = message.text.trim();
     if (text === '說明' || text === '幫助' || text.toLowerCase() === 'help') {
-      replyText(event.replyToken, HELP_TEXT);
+      replyText(event.replyToken, helpText_());
       return;
     }
     if (text === '刪除' || text === '取消') {
@@ -81,7 +84,7 @@ function handleEvent_(event) {
   }
 
   var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-  var parsed = parseWithClaude(input, today);
+  var parsed = parseMessage(input, today);
   parsed.entries = parsed.entries.filter(function (e) {
     return e.amount > 0;
   });

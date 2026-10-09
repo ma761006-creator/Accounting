@@ -7,7 +7,13 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
-function createEnv(claudeReplies) {
+function createEnv(claudeReplies, extraProps) {
+  const props = Object.assign({
+    LINE_CHANNEL_ACCESS_TOKEN: 'line-token',
+    ANTHROPIC_API_KEY: 'sk-test',
+    LINE_BOT_USER_ID: 'Ubot'
+  }, extraProps);
+  const geminiRequests = [];
   const replies = [];
   const claudeRequests = [];
   const cacheStore = new Map();
@@ -49,11 +55,7 @@ function createEnv(claudeReplies) {
     JSON,
     PropertiesService: {
       getScriptProperties: () => ({
-        getProperty: (k) => ({
-          LINE_CHANNEL_ACCESS_TOKEN: 'line-token',
-          ANTHROPIC_API_KEY: 'sk-test',
-          LINE_BOT_USER_ID: 'Ubot'
-        })[k] || null
+        getProperty: (k) => props[k] || null
       })
     },
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss },
@@ -90,6 +92,16 @@ function createEnv(claudeReplies) {
             content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: JSON.stringify(reply) }]
           });
         }
+        if (url.startsWith('https://generativelanguage.googleapis.com/')) {
+          geminiRequests.push({ url, headers: opts.headers, body: JSON.parse(opts.payload) });
+          const reply = claudeReplies.shift();
+          return response(200, {
+            candidates: [{
+              finishReason: 'STOP',
+              content: { parts: [{ text: 'thinking...', thought: true }, { text: JSON.stringify(reply) }] }
+            }]
+          });
+        }
         if (url === 'https://api.line.me/v2/bot/message/reply') {
           replies.push(JSON.parse(opts.payload).messages[0].text);
           return response(200, {});
@@ -110,8 +122,8 @@ function createEnv(claudeReplies) {
   vm.createContext(context);
 
   const dir = path.join(__dirname, '..', 'gas');
-  // Apps Script 依檔名順序載入，Config 要先載入
-  ['Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Code.gs'].forEach((f) => {
+  // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
+  ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs'].forEach((f) => {
     vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), context, { filename: f });
   });
 
@@ -128,7 +140,7 @@ function createEnv(claudeReplies) {
     return event;
   };
 
-  return { context, rows, replies, claudeRequests, post };
+  return { context, rows, replies, claudeRequests, geminiRequests, post };
 }
 
 const tests = [];
@@ -247,6 +259,35 @@ test('說明指令不呼叫 Claude', () => {
   env.post({ type: 'text', id: '1', text: '說明' });
   assert.strictEqual(env.claudeRequests.length, 0);
   assert.match(env.replies[0], /餐飲、交通、日用品、醫療/);
+});
+
+test('設定 GEMINI_API_KEY 時改用 Gemini', () => {
+  const env = createEnv([
+    { intent: 'record', entries: [{ date: '2026-10-09', category: '餐飲', item: '午餐', amount: 120, note: '' }], query: noQuery },
+    { intent: 'record', entries: [{ date: '2026-10-09', category: '日用品', item: '全聯', amount: 560, note: '' }], query: noQuery }
+  ], { GEMINI_API_KEY: 'gm-test' });
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post({ type: 'image', id: '2' });
+
+  assert.strictEqual(env.claudeRequests.length, 0);
+  assert.strictEqual(env.geminiRequests.length, 2);
+  const req = env.geminiRequests[0];
+  assert.match(req.url, /models\/gemini-flash-latest:generateContent$/);
+  assert.strictEqual(req.headers['x-goog-api-key'], 'gm-test');
+  const schema = req.body.generationConfig.responseSchema;
+  assert.strictEqual(schema.type, 'OBJECT');
+  assert.strictEqual(schema.properties.entries.items.properties.amount.type, 'NUMBER');
+  assert.ok(!JSON.stringify(schema).includes('additionalProperties'));
+  assert.deepStrictEqual(req.body.contents[0].parts, [{ text: '午餐 120' }]);
+  assert.strictEqual(env.geminiRequests[1].body.contents[0].parts[0].inlineData.mimeType, 'image/jpeg');
+  assert.deepStrictEqual(env.rows.slice(1).map((r) => r[3]), ['午餐', '全聯']);
+});
+
+test('AI_PROVIDER=claude 時即使有 Gemini 金鑰也用 Claude', () => {
+  const env = createEnv([{ intent: 'other', entries: [], query: noQuery }], { GEMINI_API_KEY: 'gm', AI_PROVIDER: 'claude' });
+  env.post({ type: 'text', id: '1', text: '你好' });
+  assert.strictEqual(env.claudeRequests.length, 1);
+  assert.strictEqual(env.geminiRequests.length, 0);
 });
 
 let failed = 0;

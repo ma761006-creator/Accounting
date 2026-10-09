@@ -8,14 +8,27 @@
 - **說明**：傳 `說明`
 - **分類**：餐飲、交通、日用品、醫療，以及其他（在 `gas/Config.gs` 修改）
 
-架構：LINE → Google Apps Script（免費）→ Claude Haiku 5.5 解析 → Google 試算表。
-每月費用約 NT$0～30，只有 Claude API 的用量要付費（一般家庭大約每月 NT$3）。
+架構：LINE → Google Apps Script（免費）→ AI 解析（Gemini 或 Claude）→ Google 試算表。
+
+| AI | 費用 | 說明 |
+|---|---|---|
+| **Gemini**（免費方案） | NT$0 | 有每日使用次數上限，家庭用量通常夠。免費方案的內容可能被 Google 用來改善產品 |
+| **Claude Haiku 5.5** | 約每月 NT$3 | 要先儲值，資料不會拿去訓練模型 |
+
+兩種都設定好的話，可以用 `AI_PROVIDER` 指定要用哪一個。
 
 ---
 
 ## 設定步驟（約 30 分鐘）
 
-### 1. 取得 Claude API 金鑰
+### 1. 取得 AI 金鑰（二選一）
+
+**Gemini（免費）**
+
+1. 到 [Google AI Studio](https://aistudio.google.com/) 用 Google 帳號登入。
+2. 點 **Get API key → Create API key**，複製金鑰。
+
+**Claude（付費，每月約 NT$3）**
 
 1. 到 [Claude Console](https://platform.claude.com/) 註冊並登入。
 2. 在 **Billing** 儲值，最低金額就夠用很久。
@@ -41,14 +54,17 @@
 2. 選單 **擴充功能 → Apps Script**。
 3. 在 Apps Script 編輯器裡，依照本專案 `gas/` 資料夾建立檔案，並貼上內容：
    - `Code.gs`（取代預設的內容）
-   - 按「＋ → 指令碼」新增 `Config`、`Claude`、`Line`、`Sheet`，各自貼上對應的 `.gs` 內容
+   - 按「＋ → 指令碼」新增 `Config`、`Claude`、`Line`、`Sheet`、`Parser`、`Gemini`，各自貼上對應的 `.gs` 內容
    - 齒輪「專案設定」勾選 **在編輯器中顯示 appsscript.json**，再把 `gas/appsscript.json` 的內容貼進去
 4. 「專案設定 → 指令碼屬性」新增：
 
    | 屬性 | 值 |
    |---|---|
    | `LINE_CHANNEL_ACCESS_TOKEN` | 第 2 步的 Channel access token |
-   | `ANTHROPIC_API_KEY` | 第 1 步的 Claude API 金鑰 |
+   | `GEMINI_API_KEY` | 第 1 步的 Gemini 金鑰（用 Gemini 時） |
+   | `ANTHROPIC_API_KEY` | 第 1 步的 Claude 金鑰（用 Claude 時） |
+   | `AI_PROVIDER` | （選填）`gemini` 或 `claude`；沒填時有 Gemini 金鑰就用 Gemini |
+   | `GEMINI_MODEL` | （選填）Gemini 模型名稱，預設 `gemini-flash-latest` |
    | `LINE_BOT_USER_ID` | （選填）第 2 步的 Your user ID |
 
 5. 回到編輯器，上方選 `setup` 函式並按 **執行**，依指示授權。試算表會多出「帳本」工作表。
@@ -74,6 +90,7 @@
 - **Webhook 網址請勿公開**：Apps Script 讀不到 LINE 的簽章標頭，無法驗證請求來源。有設定 `LINE_BOT_USER_ID` 可以擋掉一部分錯誤的請求。
 - **在群組中**，機器人只回應記帳和查詢，不會回應閒聊。
 - **記錄人**會自動抓 LINE 顯示名稱。
+- **Gemini 免費額度用完**時，機器人會回覆「免費額度已用完」，隔天會自動恢復（以太平洋時間午夜重置）。
 - 試算表可以直接修改。改分類、金額都沒問題，查詢會以試算表的內容為準。
 
 ## 開發
