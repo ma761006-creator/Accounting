@@ -86,7 +86,14 @@ function getImageContent_(message) {
     // 詳細原因只寫在執行紀錄，不回給使用者
     console.error('下載圖片失敗 ' + res.getResponseCode() + '：' + res.getContentText().slice(0, 500) +
       '｜contentProvider=' + JSON.stringify(provider));
-    throw new Error('照片下載失敗');
+    // LINE 的錯誤說明（例如 Authentication failed）不含金鑰，附在回覆裡方便排查
+    var reason = '';
+    try {
+      reason = JSON.parse(res.getContentText()).message || '';
+    } catch (e) {
+      reason = res.getContentText().slice(0, 100);
+    }
+    throw new Error('照片下載失敗（' + res.getResponseCode() + (reason ? '：' + reason : '') + '）');
   }
   var blob = res.getBlob();
   return {

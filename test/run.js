@@ -512,7 +512,7 @@ test('照片下載失敗時回覆好懂的訊息，不顯示錯誤代碼', () =>
   env.imageStatus.code = 401;
   env.post({ type: 'image', id: 'img1' });
   assert.match(env.replies[0], /照片下載失敗，請重新拍照/);
-  assert.ok(!/401/.test(env.replies[0]));
+  assert.match(env.replies[0], /（401：Authentication failed）/);
   assert.strictEqual(env.rows.length, 0);
 });
 

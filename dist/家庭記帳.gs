@@ -262,7 +262,14 @@ function getImageContent_(message) {
     // 詳細原因只寫在執行紀錄，不回給使用者
     console.error('下載圖片失敗 ' + res.getResponseCode() + '：' + res.getContentText().slice(0, 500) +
       '｜contentProvider=' + JSON.stringify(provider));
-    throw new Error('照片下載失敗');
+    // LINE 的錯誤說明（例如 Authentication failed）不含金鑰，附在回覆裡方便排查
+    var reason = '';
+    try {
+      reason = JSON.parse(res.getContentText()).message || '';
+    } catch (e) {
+      reason = res.getContentText().slice(0, 100);
+    }
+    throw new Error('照片下載失敗（' + res.getResponseCode() + (reason ? '：' + reason : '') + '）');
   }
   var blob = res.getBlob();
   return {
@@ -1923,7 +1930,8 @@ function friendlyError_(err, event) {
   var msg = String((err && err.message) || err);
   var isImage = event.message && event.message.type === 'image';
   if (/照片下載失敗/.test(msg)) {
-    return '⚠️ 這張照片下載失敗，請重新拍照或從相簿重新傳一次（不要用轉傳的）。\n也可以先用文字記帳，例如「全聯 560」。';
+    return '⚠️ 這張照片下載失敗，請重新拍照或從相簿重新傳一次（不要用轉傳的）。\n也可以先用文字記帳，例如「全聯 560」。\n\n' +
+      '（' + msg.replace(/^.*照片下載失敗（|）$/g, '') + '）';
   }
   if (/忙線|額度/.test(msg)) {
     return '⏳ ' + msg + '，' + (isImage ? '照片暫時無法辨識，請稍後再傳一次，或先用文字記帳，例如「全聯 560」。' : '請稍後再試一次。');
