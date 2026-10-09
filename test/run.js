@@ -1,0 +1,263 @@
+// 在本機用模擬的 Apps Script 環境跑 gas/*.gs，檢查記帳、查詢、刪除流程。
+// 執行：node test/run.js
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const assert = require('assert');
+
+function createEnv(claudeReplies) {
+  const replies = [];
+  const claudeRequests = [];
+  const cacheStore = new Map();
+
+  // 模擬試算表：appendRow 時把 ' 開頭轉成文字、YYYY-MM-DD 轉成 Date，和真的 Google 試算表一樣
+  const rows = [];
+  const toCell = (v) => {
+    if (typeof v === 'string' && v.startsWith("'")) return v.slice(1);
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return new (vm.runInContext('Date', context))(v + 'T00:00:00+08:00');
+    return v === undefined ? '' : v;
+  };
+  const sheet = {
+    getLastRow: () => rows.length,
+    appendRow: (r) => rows.push(r.map(toCell)),
+    setFrozenRows: () => {},
+    deleteRow: (n) => rows.splice(n - 1, 1),
+    getRange: (row, col, numRows, numCols) => ({
+      getValues: () => rows.slice(row - 1, row - 1 + numRows).map((r) => {
+        const copy = r.slice(col - 1, col - 1 + numCols);
+        while (copy.length < numCols) copy.push('');
+        return copy;
+      })
+    })
+  };
+  let sheetCreated = false;
+  const ss = {
+    getSheetByName: () => (sheetCreated ? sheet : null),
+    insertSheet: () => { sheetCreated = true; return sheet; }
+  };
+
+  const response = (code, body, blob) => ({
+    getResponseCode: () => code,
+    getContentText: () => (typeof body === 'string' ? body : JSON.stringify(body)),
+    getBlob: () => blob
+  });
+
+  const context = {
+    console,
+    JSON,
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (k) => ({
+          LINE_CHANNEL_ACCESS_TOKEN: 'line-token',
+          ANTHROPIC_API_KEY: 'sk-test',
+          LINE_BOT_USER_ID: 'Ubot'
+        })[k] || null
+      })
+    },
+    SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss },
+    CacheService: {
+      getScriptCache: () => ({
+        get: (k) => cacheStore.get(k) || null,
+        put: (k, v) => cacheStore.set(k, v)
+      })
+    },
+    LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
+    ContentService: { createTextOutput: (t) => ({ text: t }) },
+    Utilities: {
+      formatDate: (d, tz, fmt) => {
+        const parts = Object.fromEntries(
+          new Intl.DateTimeFormat('en-CA', {
+            timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+          }).formatToParts(d).map((p) => [p.type, p.value])
+        );
+        return fmt
+          .replace('yyyy', parts.year).replace('MM', parts.month).replace('dd', parts.day)
+          .replace('HH', parts.hour).replace('mm', parts.minute).replace('ss', parts.second);
+      },
+      base64Encode: (bytes) => Buffer.from(bytes).toString('base64')
+    },
+    UrlFetchApp: {
+      fetch: (url, opts) => {
+        if (url === 'https://api.anthropic.com/v1/messages') {
+          const req = JSON.parse(opts.payload);
+          claudeRequests.push(req);
+          const reply = claudeReplies.shift();
+          return response(200, {
+            stop_reason: 'end_turn',
+            content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: JSON.stringify(reply) }]
+          });
+        }
+        if (url === 'https://api.line.me/v2/bot/message/reply') {
+          replies.push(JSON.parse(opts.payload).messages[0].text);
+          return response(200, {});
+        }
+        if (url.startsWith('https://api.line.me/v2/bot/group/')) {
+          return response(200, { displayName: url.includes('Umom') ? '媽媽' : '爸爸' });
+        }
+        if (url.startsWith('https://api.line.me/v2/bot/profile/')) {
+          return response(200, { displayName: '爸爸' });
+        }
+        if (url.startsWith('https://api-data.line.me/v2/bot/message/')) {
+          return response(200, '', { getBytes: () => [1, 2, 3], getContentType: () => 'image/jpeg' });
+        }
+        throw new Error('unexpected fetch ' + url);
+      }
+    }
+  };
+  vm.createContext(context);
+
+  const dir = path.join(__dirname, '..', 'gas');
+  // Apps Script 依檔名順序載入，Config 要先載入
+  ['Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Code.gs'].forEach((f) => {
+    vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), context, { filename: f });
+  });
+
+  let eventSeq = 0;
+  const post = (message, source, extra) => {
+    const event = Object.assign({
+      type: 'message',
+      webhookEventId: 'evt' + (++eventSeq),
+      replyToken: 'rt',
+      source: source || { type: 'group', groupId: 'G1', userId: 'Udad' },
+      message
+    }, extra);
+    context.doPost({ postData: { contents: JSON.stringify({ destination: 'Ubot', events: [event] }) } });
+    return event;
+  };
+
+  return { context, rows, replies, claudeRequests, post };
+}
+
+const tests = [];
+const test = (name, fn) => tests.push({ name, fn });
+
+const noQuery = { start_date: '2026-10-09', end_date: '2026-10-09', category: '全部' };
+
+test('文字記帳：寫入試算表並回覆', () => {
+  const env = createEnv([{
+    intent: 'record',
+    entries: [
+      { date: '2026-10-08', category: '交通', item: '加油', amount: 1200, note: '' },
+      { date: '2026-10-08', category: '交通', item: '停車', amount: 60, note: '' }
+    ],
+    query: noQuery
+  }]);
+  env.post({ type: 'text', id: '468789577898262530', text: '昨天加油 1200、停車 60' });
+
+  assert.strictEqual(env.rows.length, 3); // 標題 + 2 筆
+  assert.deepStrictEqual(env.rows[0], env.context.HEADERS);
+  assert.strictEqual(env.rows[1][4], 1200);
+  assert.strictEqual(env.rows[1][5], '爸爸');
+  assert.strictEqual(env.rows[1][9], '468789577898262530');
+  assert.match(env.replies[0], /已記帳（爸爸）/);
+  assert.match(env.replies[0], /合計 \$1,260/);
+
+  const req = env.claudeRequests[0];
+  assert.strictEqual(req.model, 'claude-haiku-5-5');
+  assert.strictEqual(req.output_config.format.type, 'json_schema');
+  assert.deepStrictEqual(req.messages[0].content, [{ type: 'text', text: '昨天加油 1200、停車 60' }]);
+});
+
+test('收據照片：送出圖片給 Claude', () => {
+  const env = createEnv([{
+    intent: 'record',
+    entries: [{ date: '2026-10-09', category: '日用品', item: '全聯', amount: 560, note: '衛生紙' }],
+    query: noQuery
+  }]);
+  env.post({ type: 'image', id: '111' });
+  const content = env.claudeRequests[0].messages[0].content;
+  assert.strictEqual(content[0].type, 'image');
+  assert.strictEqual(content[0].source.media_type, 'image/jpeg');
+  assert.strictEqual(env.rows[1][7], '收據照片');
+});
+
+test('查詢：依分類與記錄人統計，含日期區間篩選', () => {
+  const env = createEnv([
+    { intent: 'record', entries: [{ date: '2026-10-01', category: '餐飲', item: '午餐', amount: 120, note: '' }], query: noQuery },
+    { intent: 'record', entries: [{ date: '2026-10-05', category: '醫療', item: '掛號', amount: 150, note: '' }], query: noQuery },
+    { intent: 'record', entries: [{ date: '2026-09-30', category: '餐飲', item: '晚餐', amount: 999, note: '' }], query: noQuery },
+    { intent: 'query', entries: [], query: { start_date: '2026-10-01', end_date: '2026-10-09', category: '全部' } }
+  ]);
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post({ type: 'text', id: '2', text: '掛號 150' }, { type: 'group', groupId: 'G1', userId: 'Umom' });
+  env.post({ type: 'text', id: '3', text: '9/30 晚餐 999' });
+  env.post({ type: 'text', id: '4', text: '這個月花多少' });
+
+  const summary = env.replies[3];
+  assert.match(summary, /總計 \$270（2 筆）/);
+  assert.match(summary, /餐飲 \$120（44%）/);
+  assert.match(summary, /醫療 \$150（56%）/);
+  assert.match(summary, /媽媽 \$150/);
+});
+
+test('刪除：只刪自己最近一次的紀錄', () => {
+  const env = createEnv([
+    { intent: 'record', entries: [{ date: '2026-10-09', category: '餐飲', item: '早餐', amount: 80, note: '' }], query: noQuery },
+    {
+      intent: 'record',
+      entries: [
+        { date: '2026-10-09', category: '餐飲', item: '午餐', amount: 100, note: '' },
+        { date: '2026-10-09', category: '餐飲', item: '飲料', amount: 50, note: '' }
+      ],
+      query: noQuery
+    },
+    { intent: 'record', entries: [{ date: '2026-10-09', category: '交通', item: '公車', amount: 15, note: '' }], query: noQuery }
+  ]);
+  env.post({ type: 'text', id: '1', text: '早餐 80' });
+  env.post({ type: 'text', id: '2', text: '午餐 100 飲料 50' });
+  env.post({ type: 'text', id: '3', text: '公車 15' }, { type: 'group', groupId: 'G1', userId: 'Umom' });
+  env.post({ type: 'text', id: '4', text: '刪除' });
+
+  const items = env.rows.slice(1).map((r) => r[3]);
+  assert.deepStrictEqual(items, ['早餐', '公車']);
+  assert.match(env.replies[3], /已刪除/);
+  assert.match(env.replies[3], /午餐/);
+  assert.match(env.replies[3], /飲料/);
+});
+
+test('群組閒聊不回覆、私訊會提示', () => {
+  const other = { intent: 'other', entries: [], query: noQuery };
+  const env = createEnv([other, other]);
+  env.post({ type: 'text', id: '1', text: '晚上吃什麼' });
+  assert.strictEqual(env.replies.length, 0);
+  env.post({ type: 'text', id: '2', text: '你好' }, { type: 'user', userId: 'Udad' });
+  assert.match(env.replies[0], /說明/);
+});
+
+test('重送的事件不重複記帳', () => {
+  const rec = { intent: 'record', entries: [{ date: '2026-10-09', category: '餐飲', item: '午餐', amount: 120, note: '' }], query: noQuery };
+  const env = createEnv([rec, rec]);
+  const event = env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post(event.message, event.source, { webhookEventId: event.webhookEventId });
+  assert.strictEqual(env.rows.length, 2);
+  assert.strictEqual(env.claudeRequests.length, 1);
+});
+
+test('不是送給這個機器人的事件會被忽略', () => {
+  const env = createEnv([]);
+  env.context.doPost({ postData: { contents: JSON.stringify({ destination: 'Uother', events: [{ type: 'message' }] }) } });
+  assert.strictEqual(env.replies.length, 0);
+});
+
+test('說明指令不呼叫 Claude', () => {
+  const env = createEnv([]);
+  env.post({ type: 'text', id: '1', text: '說明' });
+  assert.strictEqual(env.claudeRequests.length, 0);
+  assert.match(env.replies[0], /餐飲、交通、日用品、醫療/);
+});
+
+let failed = 0;
+for (const t of tests) {
+  try {
+    t.fn();
+    console.log('✓ ' + t.name);
+  } catch (err) {
+    failed++;
+    console.log('✗ ' + t.name + '\n  ' + (err.stack || err));
+  }
+}
+console.log(`\n${tests.length - failed}/${tests.length} 通過`);
+process.exit(failed ? 1 : 0);
