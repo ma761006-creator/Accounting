@@ -6,55 +6,24 @@
 
 // 用函式而不是全域變數：Code.gs 會比 Config.gs 先載入，此時 CATEGORIES 還沒定義
 function helpText_() {
-  if (getProvider_() === 'rules') {
-    return [
-      '📒 家庭記帳機器人',
-      '',
-      '記帳：品項 金額，例如',
-      '・午餐 120',
-      '・昨天 全聯 560',
-      '・10/8 中油 1200',
-      '・掛號 150 醫療（最後加分類可指定分類）',
-      '・加油 1200、停車 60（多筆用「、」隔開）',
-      '',
-      '查詢：今天、本週、本月、上月、今年',
-      '・可加分類或店名：「本月 餐飲」「全聯花多少」',
-      '・加「明細」列出每一筆：「本月 明細」',
-      '',
-      '分析：「分析」「上月分析」「本週分析」',
-      '・平均每天花多少、最大支出、和上個月同期比較',
-      '',
-      '固定支出：傳「固定支出」查看房租、水電等',
-      '・新增或修改：固定支出 Netflix 390 每月15號',
-      '',
-      '刪除：傳「刪除」會刪掉你最近一次記的帳',
-      '',
-      '分類：' + CATEGORIES.join('、')
-    ].join('\n');
-  }
+  var ai = getProvider_() !== 'rules';
   return [
     '📒 家庭記帳機器人',
     '',
-    '記帳：直接傳訊息，例如',
-    '・午餐 120',
-    '・昨天全聯 560 衛生紙',
-    '・加油 1200、停車 60',
-    '・或直接拍收據 / 發票照片',
+    '💰 記帳：' + (ai ? '直接說，例如「昨天全聯買衛生紙 560」' : '品項 金額，例如「午餐 120」「昨天 中油 1200」'),
+    '・多筆：加油 1200、停車 60',
+    ai ? '📷 發票辨識：直接傳發票或收據照片' : '📷 發票辨識：設定 Gemini 金鑰後可以傳照片',
     '',
-    '查詢：例如',
-    '・這個月花多少？',
-    '・上個月餐飲多少',
-    '・這個月全聯花多少',
-    '・本月明細',
+    '🔎 查詢：本月、上月、本週、今天',
+    '・本月 餐飲、全聯花多少、本月 明細',
+    '📊 分析：分析、本週分析、上月分析',
+    '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
-    '分析：例如',
-    '・幫我分析這個月的消費',
-    '・上個月花得比較多嗎',
+    '✏️ 修改：修改 150、修改 交通、午餐改成150',
+    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除 昨天 停車 60',
     '',
-    '固定支出：傳「固定支出」查看房租、水電等',
-    '・新增：我每個月訂 Netflix 390，15 號扣款',
-    '',
-    '刪除：傳「刪除」會刪掉你最近一次記的帳',
+    '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
+    '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
     '分類：' + CATEGORIES.join('、')
   ].join('\n');
@@ -132,13 +101,20 @@ function handleEvent_(event) {
       }));
       return;
     }
+    if (matchDueSoonQuestion_(text)) {
+      replyText_(event.replyToken, formatDueSoon_(today0, 14));
+      return;
+    }
     var recurringName = matchRecurringQuestion_(text);
     if (recurringName !== null) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
-    if (text === '刪除' || text === '取消') {
-      replyText_(event.replyToken, handleDelete_(event.source.userId));
+    var modifyCmd = parseModifyCommand_(text, today0);
+    if (modifyCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyModifyCommand_(modifyCmd, event.source.userId);
+      }));
       return;
     }
     input = { text: text };
@@ -184,6 +160,13 @@ function handleEvent_(event) {
     return;
   }
 
+  if (parsed.intent === 'modify') {
+    replyText_(event.replyToken, withLock_(function () {
+      return applyModifyCommand_(parsed.modify, event.source.userId);
+    }));
+    return;
+  }
+
   if (parsed.intent === 'analysis') {
     replyText_(event.replyToken, formatAnalysis_(analyze_(parsed.query.start_date, parsed.query.end_date, today)));
     return;
@@ -204,19 +187,6 @@ function handleEvent_(event) {
     }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
   }
-}
-
-function handleDelete_(userId) {
-  var deleted = withLock_(function () {
-    return deleteLastEntry_(userId);
-  });
-  if (deleted.length === 0) {
-    return '找不到你可以刪除的紀錄。';
-  }
-  var lines = deleted.map(function (r) {
-    return '・' + r[COL.date] + ' ' + r[COL.category] + ' ' + r[COL.item] + ' $' + formatMoney_(r[COL.amount]);
-  });
-  return '🗑️ 已刪除：\n' + lines.join('\n');
 }
 
 function formatRecorded_(entries, recorder, statedTotal) {
@@ -251,6 +221,12 @@ function formatSummary_(q, s) {
   }
 
   var lines = [title, '總計 $' + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  if (s.count > 1) {
+    var top = s.rows.reduce(function (a, r) {
+      return !a || Number(r[COL.amount]) > Number(a[COL.amount]) ? r : a;
+    }, null);
+    lines.push('🏆 最高單筆：' + top[COL.item] + ' $' + formatMoney_(top[COL.amount]) + '（' + String(top[COL.date]).slice(5) + '）');
+  }
 
   if (q.category === '全部' && Object.keys(s.byCategory).length > 1) {
     lines.push('', '依分類：');

@@ -7,10 +7,11 @@
  *
  * 回傳格式：
  *   {
- *     intent: 'record' | 'query' | 'analysis' | 'recurring' | 'other',
+ *     intent: 'record' | 'query' | 'analysis' | 'recurring' | 'modify' | 'other',
  *     entries: [{ date, category, item, amount, note }],   // intent = record
  *     query: { start_date, end_date, category, keyword, detail }  // intent = query 或 analysis
  *     recurring: { action, name, amount, amountBlank, day, every, category }  // intent = recurring
+ *     modify: { action, keyword, date, amount, newAmount, newCategory, newItem }  // intent = modify
  *   }
  */
 
@@ -48,7 +49,7 @@ function parseMessage_(input, today) {
  */
 function validateParsed_(parsed, today) {
   parsed = parsed || {};
-  var intent = ['record', 'query', 'analysis', 'recurring', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
+  var intent = ['record', 'query', 'analysis', 'recurring', 'modify', 'other'].indexOf(parsed.intent) >= 0 ? parsed.intent : 'other';
   var isDate = function (s) {
     return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T00:00:00Z'));
   };
@@ -100,11 +101,25 @@ function validateParsed_(parsed, today) {
     category: null
   };
 
+  var mo = parsed.modify || {};
+  var modify = {
+    action: mo.action === 'delete' ? 'delete' : 'edit',
+    keyword: String(mo.keyword || '').trim().slice(0, 50),
+    date: isDate(mo.date) ? mo.date : '',
+    amount: int(mo.amount, 1, 10000000),
+    newAmount: int(mo.new_amount, 1, 10000000),
+    newCategory: CATEGORIES.indexOf(mo.new_category) >= 0 ? mo.new_category : '',
+    newItem: String(mo.new_item || '').trim().slice(0, 100)
+  };
+  if (intent === 'modify' && modify.action === 'edit' && !modify.newAmount && !modify.newCategory && !modify.newItem) {
+    intent = 'other';
+  }
+
   if (intent === 'record' && entries.length === 0) intent = 'other';
   if (intent === 'recurring' && recurring.action !== 'list' && !recurring.name) intent = 'other';
   var statedTotal = Math.round(Number(parsed.statedTotal));
   return {
-    intent: intent, entries: entries, query: query, recurring: recurring,
+    intent: intent, entries: entries, query: query, recurring: recurring, modify: modify,
     statedTotal: statedTotal > 0 ? statedTotal : null
   };
 }
@@ -144,7 +159,7 @@ function getParseSchema_() {
   return {
     type: 'object',
     properties: {
-      intent: { type: 'string', enum: ['record', 'query', 'analysis', 'recurring', 'other'] },
+      intent: { type: 'string', enum: ['record', 'query', 'analysis', 'recurring', 'modify', 'other'] },
       entries: {
         type: 'array',
         items: {
@@ -172,6 +187,20 @@ function getParseSchema_() {
         required: ['action', 'name', 'amount', 'day', 'every'],
         additionalProperties: false
       },
+      modify: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['edit', 'delete'] },
+          keyword: { type: 'string', description: '要找的品項關鍵字；指最近一筆就空字串' },
+          date: { type: 'string', description: 'YYYY-MM-DD；沒指定日期就空字串' },
+          amount: { type: 'number', description: '原本的金額，用來找出那一筆；沒提到填 0' },
+          new_amount: { type: 'number', description: '改成的金額；不改填 0' },
+          new_category: { type: 'string', enum: [''].concat(CATEGORIES) },
+          new_item: { type: 'string', description: '改成的品項名稱；不改就空字串' }
+        },
+        required: ['action', 'keyword', 'date', 'amount', 'new_amount', 'new_category', 'new_item'],
+        additionalProperties: false
+      },
       query: {
         type: 'object',
         properties: {
@@ -185,7 +214,7 @@ function getParseSchema_() {
         additionalProperties: false
       }
     },
-    required: ['intent', 'entries', 'query', 'recurring'],
+    required: ['intent', 'entries', 'query', 'recurring', 'modify'],
     additionalProperties: false
   };
 }
@@ -217,9 +246,11 @@ function buildSystemPrompt_(today) {
     '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
     '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
     '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',
+    '- modify：修改或刪除已經記過的帳（例如「剛剛的午餐其實是150」「把昨天的停車費刪掉」「鯖魚那筆改成餐飲」）。',
+    '  action 為 edit 或 delete；keyword、date、amount 用來找出那一筆（指最近一筆就留空），new_* 填要改成的值，不改的留空或 0。',
     '- other：閒聊或與記帳無關的訊息。',
     '',
-    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0。'
+    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0；modify 填 edit、空字串與 0。'
   ].join('\n');
 }
 

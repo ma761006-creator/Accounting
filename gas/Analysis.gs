@@ -37,7 +37,7 @@ function daysBetween_(a, b) {
 
 /** 統計一段期間，把固定支出和日常花費分開。 */
 function tally_(rows, start, end) {
-  var t = { total: 0, daily: 0, fixed: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {} };
+  var t = { total: 0, daily: 0, fixed: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
   rows.forEach(function (r) {
     var date = r[COL.date];
     if (date < start || date > end) return;
@@ -50,6 +50,8 @@ function tally_(rows, start, end) {
       return;
     }
     t.daily += amount;
+    t.byDate[date] = (t.byDate[date] || 0) + amount;
+    if (!t.maxRow || amount > Number(t.maxRow[COL.amount])) t.maxRow = r;
     t.byCategory[r[COL.category]] = (t.byCategory[r[COL.category]] || 0) + amount;
     t.byRecorder[r[COL.recorder]] = (t.byRecorder[r[COL.recorder]] || 0) + amount;
   });
@@ -131,6 +133,18 @@ function formatAnalysis_(a) {
     }).sort(function (x, y) {
       return y.d - x.d;
     })[0];
+    // 最高單筆、最高單日（只看日常花費）
+    if (cur.maxRow) {
+      lines.push('🏆 最高單筆：' + cur.maxRow[COL.item] + ' $' + formatMoney_(cur.maxRow[COL.amount]) +
+        '（' + md(String(cur.maxRow[COL.date])) + '，' + cur.maxRow[COL.recorder] + '）');
+    }
+    var days = Object.keys(cur.byDate);
+    if (days.length > 1) {
+      var topDay = days.sort(function (x, y) {
+        return cur.byDate[y] - cur.byDate[x];
+      })[0];
+      lines.push('📆 最高單日：' + md(topDay) + ' $' + formatMoney_(cur.byDate[topDay]));
+    }
     if (rising) {
       lines.push('📌 ' + rising.c + '比' + compareLabel + '多 $' + formatMoney_(rising.d) + '，是增加最多的項目');
     }
