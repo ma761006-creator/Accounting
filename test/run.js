@@ -18,6 +18,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
   const triggers = [];
   const geminiStatuses = [];
   const replies = [];
+  const quickReplies = [];
   const claudeRequests = [];
   const cacheStore = new Map();
 
@@ -134,7 +135,9 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
           return response(200, {});
         }
         if (url === 'https://api.line.me/v2/bot/message/reply') {
-          replies.push(JSON.parse(opts.payload).messages[0].text);
+          const m = JSON.parse(opts.payload).messages[0];
+          replies.push(m.text);
+          quickReplies.push(m.quickReply ? m.quickReply.items.map((i) => i.action.label + '=' + i.action.text) : []);
           return response(200, {});
         }
         if (url.startsWith('https://api.line.me/v2/bot/group/')) {
@@ -173,7 +176,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     return event;
   };
 
-  return { context, props, rows, sheets, replies, pushes, triggers, geminiStatuses, claudeRequests, geminiRequests, post };
+  return { context, props, rows, sheets, replies, quickReplies, pushes, triggers, geminiStatuses, claudeRequests, geminiRequests, post };
 }
 
 const tests = [];
@@ -474,6 +477,32 @@ test('查詢回覆：關鍵字篩選與明細', () => {
   assert.match(reply, new RegExp(today.slice(5) + ' 全聯 \\$560（爸爸）'));
   assert.match(reply, /全聯 \$120（媽媽）/);
   assert.ok(!/中油/.test(reply));
+});
+
+test('快速選單：按鈕送出的指令都能直接處理，開了 AI 也不會呼叫 AI', () => {
+  const env = createEnv([]);
+  env.post({ type: 'text', id: '1', text: '說明' });
+  const buttons = env.quickReplies[0];
+  assert.ok(buttons.length >= 5 && buttons.length <= 13);
+  buttons.forEach((b) => assert.ok(b.split('=')[0].length <= 20, b));
+  // 逐一按下主選單的每個按鈕：都要有回覆，且不呼叫 AI
+  buttons.forEach((b, i) => env.post({ type: 'text', id: 'b' + i, text: b.split('=')[1] }));
+  assert.strictEqual(env.claudeRequests.length, 0);
+  assert.strictEqual(env.replies.length, 1 + buttons.length);
+  env.replies.slice(1).forEach((r) => assert.ok(!/看不出/.test(r), r));
+  assert.match(env.replies[1], /📊 2026|📊 \d{4}-/);
+  // 查詢、分析的回覆帶著下一步的按鈕
+  assert.ok(env.quickReplies[1].some((b) => b === '上月=上月'));
+  assert.ok(env.quickReplies[3].some((b) => b.endsWith('=上月分析')));
+  // 其他按鈕：查詢子選單、分析期間
+  env.post({ type: 'text', id: 'q', text: '查詢' });
+  assert.ok(env.quickReplies[env.quickReplies.length - 1].includes('本週=本週'));
+  ['本週分析', '上月分析', '今天', '上月'].forEach((t, i) => env.post({ type: 'text', id: 'x' + i, text: t }));
+  assert.strictEqual(env.claudeRequests.length, 0);
+  // 不是固定指令的才交給 AI
+  assert.strictEqual(env.context.isFixedCommand_('本月 明細'), true);
+  assert.strictEqual(env.context.isFixedCommand_('幫我分析這個月的消費'), false);
+  assert.strictEqual(env.context.isFixedCommand_('本月全聯'), false);
 });
 
 test('查詢回覆：10 筆以內直接列出明細', () => {
@@ -904,7 +933,7 @@ test('沒說用途時記成「未說明」並提醒補上；「你是誰」會�
   env.post({ type: 'text', id: '3', text: '你是誰？' }, { type: 'user', userId: 'Udad' });
   assert.match(env.replies[2], /我是家庭記帳機器人/);
   env.post({ type: 'text', id: '4', text: '你會什麼' });
-  assert.match(env.replies[3], /傳「說明」看完整用法/);
+  assert.match(env.replies[3], /點下面的按鈕/);
 });
 
 let failed = 0;

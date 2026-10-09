@@ -10,15 +10,25 @@ function lineFetch_(url, options) {
   return UrlFetchApp.fetch(url, options);
 }
 
-function replyText_(replyToken, text) {
+/**
+ * @param {Array<{label: string, text: string}>=} quickItems
+ *   選填的快速選單按鈕：顯示在輸入框上方，點了就會送出 text，和自己打字一樣。
+ */
+function replyText_(replyToken, text, quickItems) {
+  // LINE 單則文字上限 5000 字
+  var message = { type: 'text', text: text.slice(0, 5000) };
+  if (quickItems && quickItems.length) {
+    // LINE 限制：最多 13 個按鈕，每個標籤最多 20 字
+    message.quickReply = {
+      items: quickItems.slice(0, 13).map(function (q) {
+        return { type: 'action', action: { type: 'message', label: q.label.slice(0, 20), text: q.text } };
+      })
+    };
+  }
   var res = lineFetch_('https://api.line.me/v2/bot/message/reply', {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({
-      replyToken: replyToken,
-      // LINE 單則文字上限 5000 字
-      messages: [{ type: 'text', text: text.slice(0, 5000) }]
-    })
+    payload: JSON.stringify({ replyToken: replyToken, messages: [message] })
   });
   if (res.getResponseCode() !== 200) {
     console.error('LINE 回覆失敗 ' + res.getResponseCode() + '：' + res.getContentText());

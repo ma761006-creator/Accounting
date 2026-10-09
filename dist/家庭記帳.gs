@@ -186,15 +186,25 @@ function lineFetch_(url, options) {
   return UrlFetchApp.fetch(url, options);
 }
 
-function replyText_(replyToken, text) {
+/**
+ * @param {Array<{label: string, text: string}>=} quickItems
+ *   選填的快速選單按鈕：顯示在輸入框上方，點了就會送出 text，和自己打字一樣。
+ */
+function replyText_(replyToken, text, quickItems) {
+  // LINE 單則文字上限 5000 字
+  var message = { type: 'text', text: text.slice(0, 5000) };
+  if (quickItems && quickItems.length) {
+    // LINE 限制：最多 13 個按鈕，每個標籤最多 20 字
+    message.quickReply = {
+      items: quickItems.slice(0, 13).map(function (q) {
+        return { type: 'action', action: { type: 'message', label: q.label.slice(0, 20), text: q.text } };
+      })
+    };
+  }
   var res = lineFetch_('https://api.line.me/v2/bot/message/reply', {
     method: 'post',
     contentType: 'application/json',
-    payload: JSON.stringify({
-      replyToken: replyToken,
-      // LINE 單則文字上限 5000 字
-      messages: [{ type: 'text', text: text.slice(0, 5000) }]
-    })
+    payload: JSON.stringify({ replyToken: replyToken, messages: [message] })
   });
   if (res.getResponseCode() !== 200) {
     console.error('LINE 回覆失敗 ' + res.getResponseCode() + '：' + res.getContentText());
@@ -1399,6 +1409,8 @@ function parseMessage_(input, today) {
   var provider = getProvider_();
   var parsed;
   var aiError = '';
+  // 按鈕和固定指令（本月、本週分析、本月 明細…）不需要 AI：省額度，AI 忙線時也照常運作
+  if (input.text && isFixedCommand_(input.text)) provider = 'rules';
   try {
     if (provider === 'gemini') {
       parsed = parseWithGemini_(input, today);
@@ -1417,6 +1429,13 @@ function parseMessage_(input, today) {
   var result = validateParsed_(parsed, today);
   result.aiError = aiError;
   return result;
+}
+
+function isFixedCommand_(text) {
+  var t = normalizeText_(text).replace(/\s+/g, ' ');
+  var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年)';
+  return new RegExp('^' + period + '( ?明細)?$').test(t) ||
+    new RegExp('^' + period + '? ?分析$').test(t);
 }
 
 /**
@@ -1817,8 +1836,59 @@ function helpText_() {
     '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
-    '分類：' + CATEGORIES.join('、')
+    '分類：' + CATEGORIES.join('、'),
+    '',
+    '👇 也可以直接點下面的按鈕'
   ].join('\n');
+}
+
+/**
+ * 快速選單：每個按鈕送出的文字都是既有的固定指令，不需要另外的處理邏輯，也不會用到 AI 額度。
+ */
+function mainMenu_() {
+  return [
+    { label: '🔎 本月花費', text: '本月' },
+    { label: '📋 本月明細', text: '本月 明細' },
+    { label: '📊 本月分析', text: '分析' },
+    { label: '🔁 固定支出', text: '固定支出' },
+    { label: '⏰ 扣款提醒', text: '近期扣款' },
+    { label: '💰 怎麼記帳', text: '記帳' },
+    { label: '✏️ 修改刪除', text: '修改' }
+  ];
+}
+
+function queryMenu_() {
+  return [
+    { label: '今天', text: '今天' },
+    { label: '本週', text: '本週' },
+    { label: '本月', text: '本月' },
+    { label: '上月', text: '上月' },
+    { label: '📋 本月明細', text: '本月 明細' },
+    { label: '📊 分析', text: '分析' }
+  ];
+}
+
+function analysisMenu_() {
+  return [
+    { label: '📆 本週分析', text: '本週分析' },
+    { label: '🗓️ 本月分析', text: '分析' },
+    { label: '⏪ 上月分析', text: '上月分析' },
+    { label: '📋 本月明細', text: '本月 明細' }
+  ];
+}
+
+function recordUsage_() {
+  var ai = getProvider_() !== 'rules';
+  var lines = [
+    '💰 記帳方式',
+    ai ? '直接用說的就可以，例如：' : '輸入「品項 金額」，例如：',
+    '・午餐 120',
+    '・昨天 中油 1200',
+    '・加油 1200、停車 60（一次記多筆）'
+  ];
+  if (ai) lines.push('・也可以直接傳發票或收據照片');
+  lines.push('', '記錯了傳「刪除」就能撤銷。');
+  return lines.join('\n');
 }
 
 function doPost(e) {
@@ -1870,7 +1940,7 @@ function handleEvent_(event) {
   }
 
   if (event.type === 'join' || event.type === 'follow') {
-    replyText_(event.replyToken, helpText_());
+    replyText_(event.replyToken, helpText_(), mainMenu_());
     return;
   }
   if (event.type !== 'message') return;
@@ -1881,8 +1951,16 @@ function handleEvent_(event) {
 
   if (message.type === 'text') {
     var text = message.text.trim();
-    if (text === '說明' || text === '幫助' || text.toLowerCase() === 'help') {
-      replyText_(event.replyToken, helpText_());
+    if (/^(說明|幫助|help|選單|menu|功能)$/i.test(text)) {
+      replyText_(event.replyToken, helpText_(), mainMenu_());
+      return;
+    }
+    if (text === '記帳') {
+      replyText_(event.replyToken, recordUsage_(), mainMenu_());
+      return;
+    }
+    if (text === '查詢') {
+      replyText_(event.replyToken, '🔎 要查哪段期間？點下面的按鈕，或直接輸入，例如「全聯花多少」。', queryMenu_());
       return;
     }
     var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
@@ -1894,7 +1972,7 @@ function handleEvent_(event) {
       return;
     }
     if (matchDueSoonQuestion_(text)) {
-      replyText_(event.replyToken, formatDueSoon_(today0, 14));
+      replyText_(event.replyToken, formatDueSoon_(today0, 14), [{ label: '🔁 全部固定支出', text: '固定支出' }]);
       return;
     }
     var recurringName = matchRecurringQuestion_(text);
@@ -1960,13 +2038,13 @@ function handleEvent_(event) {
   }
 
   if (parsed.intent === 'analysis') {
-    replyText_(event.replyToken, formatAnalysis_(analyze_(parsed.query.start_date, parsed.query.end_date, today)));
+    replyText_(event.replyToken, formatAnalysis_(analyze_(parsed.query.start_date, parsed.query.end_date, today)), analysisMenu_());
     return;
   }
 
   if (parsed.intent === 'query') {
     var q = parsed.query;
-    replyText_(event.replyToken, formatSummary_(q, summarize_(q.start_date, q.end_date, q.category, q.keyword)));
+    replyText_(event.replyToken, formatSummary_(q, summarize_(q.start_date, q.end_date, q.category, q.keyword)), queryMenu_());
     return;
   }
 
@@ -1974,7 +2052,7 @@ function handleEvent_(event) {
   if (message.type === 'text' && /你是誰|你叫什麼|你會什麼|你可以做什麼|你能做什麼|自我介紹/.test(message.text)) {
     replyText_(event.replyToken, '我是家庭記帳機器人 📒\n' +
       '幫全家記帳、查詢與分析花費，也會管理房租、水電這類固定支出，扣款前一天提醒。\n\n' +
-      '試試傳「午餐 120」，或傳「說明」看完整用法。');
+      '試試傳「午餐 120」，或點下面的按鈕。', mainMenu_());
     return;
   }
 
@@ -1982,10 +2060,10 @@ function handleEvent_(event) {
   if (!isGroup) {
     var hint = getProvider_() === 'rules' || parsed.aiError ? '\n記帳請用「品項 金額」，例如「午餐 120」。' : '';
     if (parsed.aiError) {
-      replyText_(event.replyToken, '⏳ AI 暫時忙線，這則看不出要記帳還是查詢。' + hint + '\n也可以稍後再傳一次。');
+      replyText_(event.replyToken, '⏳ AI 暫時忙線，這則看不出要記帳還是查詢。' + hint + '\n也可以稍後再傳一次。', mainMenu_());
       return;
     }
-    replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n傳「說明」可以看使用方式。');
+    replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n點下面的按鈕，或傳「說明」看使用方式。', mainMenu_());
   }
 }
 
