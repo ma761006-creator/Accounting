@@ -126,6 +126,8 @@ function parseEntry_(segment, today, keywords) {
   if (spentWord.test(item)) {
     item = item.replace(spentWord, '').trim() || UNSPECIFIED_ITEM;
   }
+  // 「買咖啡」→「咖啡」；只剩一個字時保留（「買菜」）
+  item = item.replace(/^(買了?|去|在)\s*(?=\S{2,})/, '');
   // 「本月 7-11」這類被數字切開的品項不算記帳
   if (!item || /[-~～]$/.test(item) || !(amount > 0)) return null;
 

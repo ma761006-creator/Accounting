@@ -382,6 +382,9 @@ test('規則辨識：查詢期間與分類', () => {
   assert.strictEqual(q('今年 交通'), '2026-01-01|2026-10-09|交通');
   assert.strictEqual(q('醫療'), '2026-10-01|2026-10-09|醫療');
   assert.strictEqual(q('花多少'), '2026-10-01|2026-10-09|全部');
+  const rec = env.context.parseWithRules_('我今天買咖啡花了80元', '2026-10-09');
+  assert.strictEqual([rec.intent, rec.entries[0].item, rec.entries[0].category, rec.entries[0].amount].join('|'), 'record|咖啡|餐飲|80');
+  assert.strictEqual(env.context.parseWithRules_('買菜 300', '2026-10-09').entries[0].item, '買菜');
   assert.strictEqual(q('上週花多少'), '2026-09-28|2026-10-04|全部');
   // 「我」「我們家」「總共」不能變成搜尋字，不然會查不到任何紀錄
   const kw = (text) => env.context.parseWithRules_(text, '2026-10-09').query;
