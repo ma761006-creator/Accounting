@@ -1,0 +1,15 @@
+# PR 上自動跑測試，並確認 dist/ 已用 node scripts/bundle.js 重新產生。
+name: 測試
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node test/run.js

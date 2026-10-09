@@ -1,0 +1,76 @@
+# 合併到 main 後，自動把 dist/ 推送到 Google Apps Script 並更新現有的網頁應用程式部署（網址不變）。
+#
+# 需要在 GitHub「Settings → Secrets and variables → Actions」設定三個 Secrets（設定方式見 README「自動部署」）：
+#   CLASPRC_JSON   clasp login 產生的 ~/.clasprc.json 內容
+#   SCRIPT_ID      Apps Script 專案設定裡的「指令碼 ID」
+#   DEPLOYMENT_ID  部署 → 管理部署作業 裡的「部署作業 ID」
+name: 部署到 Apps Script
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gas/**'
+      - 'dist/**'
+      - 'scripts/**'
+      - 'test/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-apps-script
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 測試
+        run: node test/run.js
+
+      - name: 檢查 Secrets
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: |
+          missing=""
+          [ -z "$CLASPRC_JSON" ] && missing="$missing CLASPRC_JSON"
+          [ -z "$SCRIPT_ID" ] && missing="$missing SCRIPT_ID"
+          [ -z "$DEPLOYMENT_ID" ] && missing="$missing DEPLOYMENT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::尚未設定 Secrets：$missing（請照 README「自動部署」設定）"
+            exit 1
+          fi
+          echo "$CLASPRC_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))' \
+            || { echo "::error::CLASPRC_JSON 不是有效的 JSON，請重新複製 .clasprc.json 的完整內容"; exit 1; }
+
+      - name: 安裝 clasp
+        run: npm install -g @google/clasp@3.4.1
+
+      - name: 設定 clasp
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          chmod 600 ~/.clasprc.json
+          node -e 'require("fs").writeFileSync(".clasp.json", JSON.stringify({ scriptId: process.env.SCRIPT_ID.trim(), rootDir: "dist" }))'
+
+      - name: 上傳程式碼
+        run: clasp push --force
+
+      - name: 更新網頁應用程式部署
+        env:
+          DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+        run: clasp update-deployment "$(echo "$DEPLOYMENT_ID" | tr -d '[:space:]')" --description "GitHub ${GITHUB_SHA::7}"
+
+      - name: 清除憑證
+        if: always()
+        run: rm -f ~/.clasprc.json .clasp.json
