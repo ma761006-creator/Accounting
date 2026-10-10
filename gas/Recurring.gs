@@ -215,11 +215,21 @@ function parseRecurringCommand_(text) {
     .replace(/每個月/g, '每月')
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
-  // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
-  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
+  // 「修改固定支出房租…」「刪除固定支出 房租」：開頭的動詞
+  var m = t.match(/^(修改|更改|更新|調整|設定|新增|改|刪除|移除|取消)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
   if (!m) return null;
-  var rest = m[2].trim();
-  if (!rest) return { action: 'list' };
+  var verb = m[1] || '';
+  var kind = m[2];
+  // 從清單複製的格式：「・股票定期定額（李宗諭）｜$17,000｜每月 10 號｜下次 2026-11-10」
+  var rest = m[3]
+    .replace(/[｜|]/g, ' ')
+    .replace(/(^|\n)\s*[・•]\s*/g, '$1')
+    .replace(/下次(扣款|入帳)?\s*[:：]?\s*\d{4}-\d{1,2}-\d{1,2}/g, ' ')
+    .replace(/每年\s*(\d{1,2})\s*\/\s*(\d{1,2})/g, '每年$1月 $2號')
+    .replace(/金額不固定（只提醒）/g, '不固定')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+  if (!rest) return verb && /刪除|移除|取消/.test(verb) ? { action: 'invalid' } : { action: 'list' };
 
   // 一次設定多項：「固定支出」後面每一行一項
   var lines = rest.split(/\n+/).map(function (l) {
@@ -231,7 +241,7 @@ function parseRecurringCommand_(text) {
     return {
       action: 'batch',
       cmds: lines.map(function (line) {
-        var c = parseRecurringCommand_(m[1] + ' ' + line);
+        var c = parseRecurringCommand_(verb + kind + ' ' + line);
         return c && c.action !== 'list' ? c : { action: 'invalid', line: line };
       })
     };
@@ -245,12 +255,22 @@ function parseRecurringCommand_(text) {
     .replace(/([^\d\s\-－每])(\d+)(?=\s|$)/g, '$1 $2')
     .trim();
 
+  // 「固定支出 刪除 X」或「刪除固定支出 X」：只取名稱和家人，金額、日期不用管
   var del = rest.match(/^(刪除|移除)\s*(.+)$/);
-  if (del) {
-    var delName = del[2].trim();
-    var delOwner = delName.match(/^(.+?)\s*[（(]\s*(.+?)\s*[)）]$/);
-    if (!delOwner) return { action: 'delete', name: delName };
-    return { action: 'delete', name: delOwner[1], owner: delOwner[2] === '全家' ? '' : delOwner[2] };
+  if (del || /刪除|移除|取消/.test(verb)) {
+    var target = parseRecurringCommand_(kind + ' ' + (del ? del[2] : rest));
+    var delName = target && target.name ? target.name : (del ? del[2] : rest).trim();
+    var delOwner = target && target.name ? target.owner : undefined;
+    if (delOwner === undefined) {
+      var ownerOnly = delName.match(/^(.+?)\s*[（(]\s*(.+?)\s*[)）]$/);
+      if (ownerOnly) {
+        delName = ownerOnly[1];
+        delOwner = ownerOnly[2] === '全家' ? '' : ownerOnly[2];
+      }
+    }
+    var delCmd = { action: 'delete', name: delName };
+    if (delOwner !== undefined) delCmd.owner = delOwner;
+    return delCmd;
   }
 
   var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, month: null, category: null };
@@ -270,7 +290,7 @@ function parseRecurringCommand_(text) {
       cmd.day = +day[1];
     } else if (amount && nameParts.length > 0) {
       cmd.amount = +amount[1];
-    } else if (token === '不固定' || token === '金額不固定') {
+    } else if (token === '不固定' || token === '金額不固定' || token === '只提醒') {
       cmd.amountBlank = true;
     } else if (CATEGORIES.indexOf(token) >= 0) {
       cmd.category = token;
@@ -286,7 +306,7 @@ function parseRecurringCommand_(text) {
     // 「房租（全家）」：全家共用，不屬於任何一位家人
     cmd.owner = ownerMatch[2] === '全家' ? '' : ownerMatch[2];
   }
-  if (m[1] === '固定收入') cmd.category = INCOME_CATEGORY;
+  if (kind === '固定收入') cmd.category = INCOME_CATEGORY;
   if (!cmd.name) return { action: 'invalid' };
   // 沒有金額、日期、週期的不算指令（例如「固定支出好多」「固定支出有哪些」），交給問句判斷
   if (cmd.amount === null && !cmd.amountBlank && cmd.day === null && cmd.every === null && !cmd.category) return null;
