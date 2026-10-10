@@ -1116,7 +1116,8 @@ function applyRecurringCommand_(cmd, today, setter) {
       return '有好幾位家人都有「' + cmd.name + '」，請指定是誰的，例如「固定支出 刪除 ' + cmd.name + '（媽媽）」。';
     }
     if (!target) return '找不到固定支出「' + cmd.name + '」。傳「固定支出」可以看目前的項目。';
-    var deletedOwner = String(sheet.getRange(target, RCOL.owner + 1).getValue() || '').trim();
+    var deletedOwner = String(sheet.getRange(target, RCOL.owner + 1).getValue() || '').trim() ||
+      cleanRecurringName_(sheet.getRange(target, RCOL.name + 1).getValue()).owner;
     sheet.deleteRow(target);
     return '🗑️ 已刪除「' + recurringLabel_({ name: cmd.name, owner: deletedOwner }) + '」';
   }
@@ -1184,6 +1185,19 @@ function applyRecurringCommand_(cmd, today, setter) {
  * - 其次是同名、沒有成員的（舊資料或全家共用）
  * - 刪除時：只有一列同名就是它；好幾位家人都有同名的回傳 -1，請對方指定
  */
+/**
+ * 舊版把「股票定期定額Iris ｜ 17000 ｜（李宗諭）」整串當成名稱存起來；
+ * 比對時拆回名稱與家人，才找得到、刪得掉。一般名稱（例如 7-11）原樣不動。
+ */
+function cleanRecurringName_(raw) {
+  var s = String(raw).trim();
+  if (!/[｜|]|^[・•]/.test(s)) return { name: s, owner: '' };
+  s = s.replace(/[｜|]/g, ' ').replace(/^[・•\s]+/, '').replace(/(^|\s)\$?\d[\d,]*(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  var m = s.match(/^(.+?)\s*[（(]\s*(.+?)\s*[)）]$/);
+  return m ? { name: m[1].trim(), owner: m[2] === '全家' ? '' : m[2] } : { name: s, owner: '' };
+}
+
 function findRecurringRow_(sheet, name, owner, forDelete) {
   if (sheet.getLastRow() < 2) return 0;
   var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, RECURRING_HEADERS.length).getValues();
@@ -1191,8 +1205,9 @@ function findRecurringRow_(sheet, name, owner, forDelete) {
   var who = String(owner || '').trim();
   var same = [];
   for (var i = 0; i < rows.length; i++) {
-    if (String(rows[i][RCOL.name]).trim().toLowerCase() === target) {
-      same.push({ row: i + 2, owner: String(rows[i][RCOL.owner] || '').trim() });
+    var cleaned = cleanRecurringName_(rows[i][RCOL.name]);
+    if (cleaned.name.toLowerCase() === target) {
+      same.push({ row: i + 2, owner: String(rows[i][RCOL.owner] || '').trim() || cleaned.owner });
     }
   }
   var exact = same.filter(function (x) {
