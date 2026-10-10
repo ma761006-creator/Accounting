@@ -673,6 +673,18 @@ test('修改固定支出：開頭有「修改」、金額日期黏在一起也�
   assert.strictEqual(env.context.parseModifyCommand_('修改 午餐 早餐', '2026-10-09').newItem, '早餐');
 });
 
+test('固定支出算全家共同，不算在記帳的家人身上', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '午餐 120' });
+  env.post({ type: 'text', id: '2', text: '晚餐 300' }, { type: 'group', groupId: 'G1', userId: 'Umom' });
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  env.context.appendEntries_([{ date: today, category: '其他', item: '房租', amount: 9900, note: '固定支出自動記帳' }],
+    { recorder: '🏠 全家', userId: '', messageId: 'recurring:房租', source: '固定支出' });
+  env.post({ type: 'text', id: '3', text: '今天' });
+  const reply = env.replies[2];
+  assert.match(reply, /依記錄人：\n・爸爸 \$120\n・媽媽 \$300\n・🏠 全家（固定支出）\$9,900/);
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
@@ -743,7 +755,7 @@ test('固定支出：到期自動記帳、前一天提醒、金額空白只提�
   const ledger = env.rows.slice(1);
   assert.strictEqual(ledger.length, 1);
   assert.strictEqual(ledger[0][3], '房租');
-  assert.strictEqual(ledger[0][5], '🔁 固定支出');
+  assert.strictEqual(ledger[0][5], '🏠 全家');
   const fmt = (d) => env.context.Utilities.formatDate(d, 'Asia/Taipei', 'yyyy-MM-dd');
   assert.strictEqual(fmt(sheet.data[1][5]), '2026-12-05');
 

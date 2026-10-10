@@ -355,11 +355,12 @@ function formatSummary_(q, s) {
   }
 
   var recorders = Object.keys(s.byRecorder);
-  if (recorders.length > 1) {
+  if (recorders.length > 1 || (recorders.length && s.family > 0)) {
     lines.push('', '依記錄人：');
     recorders.forEach(function (name) {
       lines.push('・' + name + ' $' + formatMoney_(s.byRecorder[name]));
     });
+    if (s.family > 0) lines.push('・' + FAMILY_RECORDER + '（固定支出）$' + formatMoney_(s.family));
   }
 
   // 筆數少就直接列出明細，不用另外打「明細」

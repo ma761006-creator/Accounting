@@ -61,7 +61,8 @@ function processRecurring_(today) {
           amount: item.amount,
           note: '固定支出自動記帳'
         }], {
-          recorder: '🔁 固定支出',
+          // 固定支出是全家的開銷，不算在任何一位家人身上
+          recorder: FAMILY_RECORDER,
           userId: '',
           messageId: 'recurring:' + item.name + ':' + item.next,
           source: '固定支出'

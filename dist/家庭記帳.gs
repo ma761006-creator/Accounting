@@ -15,6 +15,9 @@
  */
 
 // 記帳分類。「其他」用來接住不屬於前四類的消費，不需要可以刪掉。
+/** 固定支出自動記帳時的記錄人：屬於全家，不屬於任何一位家人。 */
+var FAMILY_RECORDER = '🏠 全家';
+
 var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '其他'];
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
@@ -122,7 +125,8 @@ function readRows_() {
  *   rows 依日期排序，供列出明細
  */
 function summarize_(startDate, endDate, category, keyword) {
-  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, rows: [] };
+  // family：固定支出（全家共同），不算進個人
+  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, rows: [] };
   var kw = String(keyword || '').toLowerCase();
   readRows_().forEach(function (r) {
     var date = r[COL.date];
@@ -134,7 +138,11 @@ function summarize_(startDate, endDate, category, keyword) {
     result.total += amount;
     result.count += 1;
     result.byCategory[r[COL.category]] = (result.byCategory[r[COL.category]] || 0) + amount;
-    result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+    if (r[COL.source] === '固定支出') {
+      result.family += amount;
+    } else {
+      result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+    }
   });
   result.rows.sort(function (a, b) {
     return a[COL.date] < b[COL.date] ? -1 : a[COL.date] > b[COL.date] ? 1 : 0;
@@ -784,7 +792,8 @@ function processRecurring_(today) {
           amount: item.amount,
           note: '固定支出自動記帳'
         }], {
-          recorder: '🔁 固定支出',
+          // 固定支出是全家的開銷，不算在任何一位家人身上
+          recorder: FAMILY_RECORDER,
           userId: '',
           messageId: 'recurring:' + item.name + ':' + item.next,
           source: '固定支出'
@@ -1276,7 +1285,7 @@ function formatAnalysis_(a) {
 
   var fixedNames = Object.keys(cur.fixedItems);
   if (fixedNames.length) {
-    lines.push('', '🔁 固定支出');
+    lines.push('', '🔁 固定支出（全家共同）');
     fixedNames.forEach(function (n) {
       lines.push('・' + n + ' $' + formatMoney_(cur.fixedItems[n]));
     });
@@ -2491,11 +2500,12 @@ function formatSummary_(q, s) {
   }
 
   var recorders = Object.keys(s.byRecorder);
-  if (recorders.length > 1) {
+  if (recorders.length > 1 || (recorders.length && s.family > 0)) {
     lines.push('', '依記錄人：');
     recorders.forEach(function (name) {
       lines.push('・' + name + ' $' + formatMoney_(s.byRecorder[name]));
     });
+    if (s.family > 0) lines.push('・' + FAMILY_RECORDER + '（固定支出）$' + formatMoney_(s.family));
   }
 
   // 筆數少就直接列出明細，不用另外打「明細」

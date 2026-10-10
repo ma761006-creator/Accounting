@@ -162,7 +162,7 @@ function formatAnalysis_(a) {
 
   var fixedNames = Object.keys(cur.fixedItems);
   if (fixedNames.length) {
-    lines.push('', '🔁 固定支出');
+    lines.push('', '🔁 固定支出（全家共同）');
     fixedNames.forEach(function (n) {
       lines.push('・' + n + ' $' + formatMoney_(cur.fixedItems[n]));
     });
