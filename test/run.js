@@ -828,6 +828,20 @@ test('固定支出：「刪除固定支出…」與從清單複製的格式', ()
   assert.match(delReply, /已刪除「股票定期定額Iris（李宗諭）」/);
 });
 
+test('固定支出：舊版把整串文字當名稱存的項目也刪得掉', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const sheet = env.sheets['固定支出'];
+  sheet.appendRow(['股票定期定額Iris ｜ 17000 ｜（李宗諭）', '', '其他', 10, 1, '2026-10-10', '是']);
+  sheet.appendRow(['・電話費Iris ｜ 1478 ｜（李宗諭）', '', '其他', 28, 1, '2026-10-28', '是']);
+  sheet.appendRow(['7-11', 100, '餐飲', 5, 1, '2026-11-05', '是']);
+  const apply = (t) => env.context.applyRecurringCommand_(env.context.parseRecurringCommand_(t), '2026-10-10', '李宗諭');
+  assert.match(apply('刪除固定支出股票定期定額Iris｜ 17000｜（李宗諭）｜'), /已刪除「股票定期定額Iris（李宗諭）」/);
+  assert.match(apply('固定支出 刪除 電話費Iris'), /已刪除/);
+  assert.match(apply('固定支出 刪除 7-11'), /已刪除「7-11/);
+  assert.deepStrictEqual(sheet.data.slice(1).map((r) => r[0]), ['房租', '水電']);
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
