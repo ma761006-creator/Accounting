@@ -453,9 +453,9 @@ test('規則模式：試算表「關鍵字」工作表優先於內建關鍵字',
   env.context.setup();
   assert.ok(env.sheets['關鍵字']);
   env.sheets['關鍵字'].appendRow(['全聯', '餐飲']);
-  env.sheets['關鍵字'].appendRow(['寵物', '不存在的分類']);
+  env.sheets['關鍵字'].appendRow(['花店', '不存在的分類']);
   env.post({ type: 'text', id: '1', text: '全聯 450' });
-  env.post({ type: 'text', id: '2', text: '寵物飼料 300' });
+  env.post({ type: 'text', id: '2', text: '花店 300' });
   assert.deepStrictEqual(env.rows.slice(1).map((r) => r[2]), ['餐飲', '其他']);
 });
 
@@ -599,7 +599,7 @@ test('用 LINE 管理分類關鍵字，AI 記帳也照關鍵字分類', () => {
   assert.match(env.replies[5], /已刪除關鍵字「健身房」/);
 });
 
-test('育兒、旅遊、娛樂分類：內建關鍵字與指定分類', () => {
+test('育兒、旅遊、娛樂、寵物分類：內建關鍵字與指定分類', () => {
   const env = createEnv([], RULES);
   const cat = (t) => env.context.parseWithRules_(t, '2026-10-09').entries.map((e) => e.category).join(',');
   assert.strictEqual(cat('尿布 899'), '育兒');
@@ -614,6 +614,12 @@ test('育兒、旅遊、娛樂分類：內建關鍵字與指定分類', () => {
   assert.strictEqual(cat('健身房 1500'), '娛樂');
   assert.strictEqual(cat('高鐵 1490'), '交通');
   assert.strictEqual(cat('KTV 900'), '娛樂');
+  assert.strictEqual(cat('貓砂 450'), '寵物');
+  assert.strictEqual(cat('狗飼料 1200'), '寵物');
+  assert.strictEqual(cat('動物醫院 800'), '寵物'); // 不是醫療
+  assert.strictEqual(cat('醫院 800'), '醫療');
+  assert.strictEqual(cat('寵物零食 199'), '寵物'); // 不是餐飲
+  assert.notStrictEqual(cat('熱狗 35'), '寵物'); // 單一個「狗」字不算
 });
 
 test('修改固定支出：開頭有「修改」、金額日期黏在一起也看得懂，不會改到帳本', () => {
