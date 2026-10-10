@@ -20,6 +20,8 @@
 
 function parseModifyCommand_(text, today) {
   var t = normalizeText_(text);
+  // 提到固定支出的交給固定支出指令或 AI，不改帳本
+  if (/固定支出|固定收入|訂閱/.test(t)) return null;
 
   // 「重複記帳了，刪除」「刪除重複」：刪掉自己最近重複的那筆
   if (/重複|重覆|記兩次|記了兩次/.test(t) && /刪|移除|取消|撤銷/.test(t)) return { action: 'dedupe' };
@@ -37,9 +39,6 @@ function parseModifyCommand_(text, today) {
     target.action = 'delete';
     return target;
   }
-
-  // 提到固定支出的交給固定支出指令或 AI，不改帳本
-  if (/固定支出|固定收入|訂閱/.test(t)) return null;
 
   // 「午餐改成150」「鯖魚改成 餐飲」
   var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);

@@ -796,6 +796,38 @@ test('不同家人的固定收支是不同筆，同名也不會互相覆蓋', ()
   assert.deepStrictEqual(rows(), ['85000|爸爸']);
 });
 
+test('固定支出：「刪除固定支出…」與從清單複製的格式', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const r = (t) => JSON.parse(JSON.stringify(env.context.parseRecurringCommand_(t)));
+  // 使用者實際傳的訊息
+  assert.deepStrictEqual(r('刪除固定支出股票定期定額Iris｜ 17000｜（李宗諭）｜'), { action: 'delete', name: '股票定期定額Iris', owner: '李宗諭' });
+  assert.deepStrictEqual(r('刪除固定支出 股票定期定額Iris ｜ 17000 ｜（李宗諭）｜'), { action: 'delete', name: '股票定期定額Iris', owner: '李宗諭' });
+  const edit = r('修改固定支出股票定期定額Iris｜ 17000｜（李宗諭）｜');
+  assert.strictEqual(edit.action, 'upsert');
+  assert.strictEqual(edit.name, '股票定期定額Iris');
+  assert.strictEqual(edit.owner, '李宗諭');
+  assert.strictEqual(edit.amount, 17000);
+  // 清單整行複製
+  const copied = r('固定支出 ・房租（全家）｜$20,000｜每月 1 號｜下次 2026-11-01');
+  assert.strictEqual(copied.name, '房租');
+  assert.strictEqual(copied.owner, '');
+  assert.strictEqual(copied.amount, 20000);
+  assert.strictEqual(copied.day, 1);
+  assert.deepStrictEqual(r('刪除固定支出 房租'), { action: 'delete', name: '房租' });
+  assert.strictEqual(r('取消訂閱 Netflix').action, 'delete');
+  // 不會跑去刪帳本
+  assert.strictEqual(env.context.parseModifyCommand_('刪除固定支出 房租', '2026-10-09'), null);
+
+  // 實際走一次：新增、修改、刪除
+  const add = env.context.applyRecurringCommand_(env.context.parseRecurringCommand_('固定支出 股票定期定額Iris 17000 每月10號'), '2026-10-09', '李宗諭');
+  assert.match(add, /股票定期定額Iris（李宗諭）｜\$17,000/);
+  const upd = env.context.applyRecurringCommand_(env.context.parseRecurringCommand_('修改固定支出股票定期定額Iris｜ 18000｜（李宗諭）｜'), '2026-10-09', '李宗諭');
+  assert.match(upd, /已更新固定支出[\s\S]*股票定期定額Iris（李宗諭）｜\$18,000/);
+  const delReply = env.context.applyRecurringCommand_(env.context.parseRecurringCommand_('刪除固定支出股票定期定額Iris｜ 18000｜（李宗諭）｜'), '2026-10-09', '李宗諭');
+  assert.match(delReply, /已刪除「股票定期定額Iris（李宗諭）」/);
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
