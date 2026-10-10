@@ -161,7 +161,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Modify.gs']
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Plan.gs', 'Modify.gs']
     .map((f) => path.join(dir, f));
   files.forEach((f) => {
     vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
@@ -685,6 +685,87 @@ test('固定支出算全家共同，不算在記帳的家人身上', () => {
   assert.match(reply, /依記錄人：\n・爸爸 \$120\n・媽媽 \$300\n・🏠 全家（固定支出）\$9,900/);
 });
 
+test('收入：記帳、查詢、分析都和支出分開', () => {
+  const env = createEnv([], RULES);
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  const p = (t) => env.context.parseWithRules_(t, '2026-10-09').entries.map((e) => e.category + '|' + e.item + '|' + e.amount).join(',');
+  assert.strictEqual(p('收入 醫院 85000'), '收入|醫院|85000');
+  assert.strictEqual(p('手術額外收入 12000'), '收入|手術額外收入|12000');
+  assert.strictEqual(p('年終獎金 50000'), '收入|年終獎金|50000');
+  assert.strictEqual(p('午餐 120'), '餐飲|午餐|120');
+
+  env.post({ type: 'text', id: '1', text: '收入 醫院 85000' });
+  assert.match(env.replies[0], /💰 收入｜醫院｜\$85,000/);
+  env.post({ type: 'text', id: '2', text: '午餐 120' });
+  env.post({ type: 'text', id: '3', text: '本月' });
+  assert.match(env.replies[2], /總計 \$120（1 筆）/); // 收入不算進支出
+  assert.match(env.replies[2], /💰 收入 \$85,000｜結餘 \$84,880/);
+  env.post({ type: 'text', id: '4', text: '本月收入' });
+  assert.match(env.replies[3], /收入合計 \$85,000（1 筆）/);
+  env.post({ type: 'text', id: '5', text: '分析' });
+  assert.match(env.replies[4], /💵 總支出 \$120/);
+  assert.match(env.replies[4], /💰 收入 \$85,000｜結餘 \$84,880（存下 100%）/);
+  assert.ok(!/收入 \$85,000（/.test(env.replies[4].split('📂')[1] || '')); // 分類裡沒有收入
+  assert.strictEqual(env.context.isFixedCommand_('本月收入'), true);
+  assert.ok(today);
+});
+
+test('固定收入與每年一次的固定支出', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const r = (t) => env.context.parseRecurringCommand_(t);
+  const income = r('固定收入 薪水 85000 每月5號');
+  assert.strictEqual(income.category, '收入');
+  assert.strictEqual(income.day, 5);
+  const yearly = r('固定支出 保險 36000 每年3月15號');
+  assert.strictEqual(yearly.every, 12);
+  assert.strictEqual(yearly.month, 3);
+  assert.strictEqual(yearly.day, 15);
+
+  const reply = env.context.applyRecurringCommand_(yearly, '2026-10-09');
+  assert.match(reply, /保險｜\$36,000｜每年 3\/15/);
+  assert.match(reply, /下次扣款：2027-03-15/);
+  const incReply = env.context.applyRecurringCommand_(income, '2026-10-09');
+  assert.match(incReply, /已新增固定收入[\s\S]*薪水｜\$85,000｜每月 5 號[\s\S]*下次入帳：2026-11-05/);
+
+  // 到期自動記成收入，記錄人是全家，不提醒「要繳」
+  const msgs = env.context.processRecurring_('2026-11-05');
+  assert.ok(msgs.some((m) => /💰 已自動記收入：薪水 \$85,000/.test(m)), msgs.join('\n'));
+  const row = env.rows.find((x) => x[3] === '薪水');
+  assert.strictEqual(row[2], '收入');
+  assert.strictEqual(row[5], '🏠 全家');
+  assert.match(env.context.formatRecurringList_(), /💰 固定收入\n・薪水/);
+  assert.ok(!/薪水/.test(env.context.formatDueSoon_('2026-12-01', 14)));
+});
+
+test('存錢目標與年度收支計畫', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const p = (t) => env.context.parsePlanCommand_(t);
+  assert.strictEqual(p('存錢目標 100萬').amount, 1000000);
+  assert.strictEqual(p('存錢目標 1,500,000').amount, 1500000);
+  assert.strictEqual(p('年度計畫').action, 'plan');
+  assert.strictEqual(p('存錢目標 刪除').action, 'clearGoal');
+  assert.strictEqual(p('午餐 120'), null);
+
+  ['固定收入 醫院 100000 每月5號', '固定支出 房租 20000 每月1號', '固定支出 保險 36000 每年3月15號']
+    .forEach((t) => env.post({ type: 'text', id: t, text: t }));
+  env.post({ type: 'text', id: 'g', text: '存錢目標 100萬' });
+  const plan = env.replies[env.replies.length - 1];
+  assert.match(plan, /已設定今年存錢目標 \$1,000,000/);
+  assert.match(plan, /貳、月淨收入[\s\S]*醫院 \$100,000[\s\S]*合計 \$100,000 × 12 = \$1,200,000/);
+  assert.match(plan, /參、月固定支出[\s\S]*房租 \$20,000/);
+  assert.match(plan, /肆、年固定支出[\s\S]*保險 \$36,000/);
+  // 年淨收入 1,200,000 − 年固定支出（20,000×12 + 36,000 = 276,000）= 924,000
+  assert.match(plan, /年固定支出（B）\$276,000/);
+  assert.match(plan, /年度淨損益（A−B）\+\$924,000（結餘）/);
+  assert.match(plan, /存錢目標 \$1,000,000：固定收支就已經不夠，還差 \$76,000/);
+  assert.match(plan, /📊 今年實際/);
+  env.post({ type: 'text', id: 'p', text: '年度計畫' });
+  assert.match(env.replies[env.replies.length - 1], /^📋 \d{4} 年度收支計畫/);
+  assert.strictEqual(env.claudeRequests.length, 0);
+});
+
 test('查詢回覆：10 筆以內直接列出明細', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '午餐 120' });
@@ -792,13 +873,13 @@ test('固定支出指令解析', () => {
   const p = (t) => JSON.stringify(env.context.parseRecurringCommand_(t));
   assert.strictEqual(p('固定支出'), '{"action":"list"}');
   assert.strictEqual(p('固定支出 Netflix 390 每月15號'),
-    '{"action":"upsert","name":"Netflix","amount":390,"amountBlank":false,"day":15,"every":1,"category":null}');
+    '{"action":"upsert","name":"Netflix","amount":390,"amountBlank":false,"day":15,"every":1,"month":null,"category":null}');
   assert.strictEqual(p('訂閱 YouTube Premium 199 每個月 3號'),
-    '{"action":"upsert","name":"YouTube Premium","amount":199,"amountBlank":false,"day":3,"every":1,"category":null}');
+    '{"action":"upsert","name":"YouTube Premium","amount":199,"amountBlank":false,"day":3,"every":1,"month":null,"category":null}');
   assert.strictEqual(p('固定支出 電費 不固定 每兩個月 20號'),
-    '{"action":"upsert","name":"電費","amount":null,"amountBlank":true,"day":20,"every":2,"category":null}');
+    '{"action":"upsert","name":"電費","amount":null,"amountBlank":true,"day":20,"every":2,"month":null,"category":null}');
   assert.strictEqual(p('固定支出 房租 16000'),
-    '{"action":"upsert","name":"房租","amount":16000,"amountBlank":false,"day":null,"every":null,"category":null}');
+    '{"action":"upsert","name":"房租","amount":16000,"amountBlank":false,"day":null,"every":null,"month":null,"category":null}');
   assert.strictEqual(p('固定支出 刪除 Netflix'), '{"action":"delete","name":"Netflix"}');
   assert.strictEqual(p('固定支出 Netflix 390 40號'), '{"action":"invalid"}');
   assert.strictEqual(p('固定支出好多'), 'null');

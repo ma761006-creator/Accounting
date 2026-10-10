@@ -48,7 +48,7 @@ function parseMessage_(input, today) {
 function isFixedCommand_(text) {
   var t = normalizeText_(text).replace(/\s+/g, ' ');
   var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年)';
-  return new RegExp('^' + period + '( ?明細)?$').test(t) ||
+  return new RegExp('^' + period + '( ?(明細|收入))?( ?明細)?$').test(t) ||
     new RegExp('^' + period + '? ?分析$').test(t);
 }
 
@@ -69,7 +69,7 @@ function validateParsed_(parsed, today) {
     if (!(amount > 0) || !isFinite(amount) || !item) return null;
     return {
       date: isDate(e.date) && e.date <= today ? e.date : today,
-      category: CATEGORIES.indexOf(e.category) >= 0 ? e.category : '其他',
+      category: CATEGORIES.indexOf(e.category) >= 0 || e.category === INCOME_CATEGORY ? e.category : '其他',
       item: item.slice(0, 100),
       amount: amount,
       note: String(e.note || '').trim().slice(0, 200)
@@ -90,7 +90,7 @@ function validateParsed_(parsed, today) {
   var query = {
     start_date: start,
     end_date: end,
-    category: CATEGORIES.indexOf(q.category) >= 0 ? q.category : '全部',
+    category: CATEGORIES.indexOf(q.category) >= 0 || q.category === INCOME_CATEGORY ? q.category : '全部',
     keyword: String(q.keyword || '').trim().slice(0, 50),
     detail: q.detail === true
   };
@@ -107,7 +107,8 @@ function validateParsed_(parsed, today) {
     amountBlank: false,
     day: int(r.day, 1, 31),
     every: int(r.every, 1, 12),
-    category: null
+    month: null,
+    category: r.kind === '收入' ? INCOME_CATEGORY : null
   };
 
   var mo = parsed.modify || {};
@@ -175,7 +176,7 @@ function getParseSchema_() {
           type: 'object',
           properties: {
             date: { type: 'string', description: 'YYYY-MM-DD' },
-            category: { type: 'string', enum: CATEGORIES },
+            category: { type: 'string', enum: CATEGORIES.concat([INCOME_CATEGORY]) },
             item: { type: 'string' },
             amount: { type: 'number' },
             note: { type: 'string' }
@@ -191,9 +192,10 @@ function getParseSchema_() {
           name: { type: 'string' },
           amount: { type: 'number', description: '每期金額；沒提到或金額不固定填 0' },
           day: { type: 'number', description: '每月幾號扣款；沒提到填 0' },
-          every: { type: 'number', description: '每幾個月一期；沒提到填 0' }
+          every: { type: 'number', description: '每幾個月一期；沒提到填 0' },
+          kind: { type: 'string', enum: ['支出', '收入'], description: '固定收入（薪水等）填收入，其他填支出' }
         },
-        required: ['action', 'name', 'amount', 'day', 'every'],
+        required: ['action', 'name', 'amount', 'day', 'every', 'kind'],
         additionalProperties: false
       },
       modify: {
@@ -215,7 +217,7 @@ function getParseSchema_() {
         properties: {
           start_date: { type: 'string', description: 'YYYY-MM-DD' },
           end_date: { type: 'string', description: 'YYYY-MM-DD' },
-          category: { type: 'string', enum: ['全部'].concat(CATEGORIES) },
+          category: { type: 'string', enum: ['全部'].concat(CATEGORIES).concat([INCOME_CATEGORY]) },
           keyword: { type: 'string', description: '品項或店名關鍵字，沒有就空字串' },
           detail: { type: 'boolean', description: '是否要列出每一筆明細' }
         },
@@ -243,6 +245,7 @@ function buildSystemPrompt_(today) {
     '- 娛樂：電影、KTV、遊樂園、展覽、演唱會、健身房、運動、遊戲、影音串流、興趣嗜好',
     '- 寵物：飼料、罐頭、貓砂、寵物用品、美容、寄宿，以及寵物的看診、疫苗、結紮（不算醫療）',
     '- 其他：不屬於以上分類的消費',
+    '- 收入：薪水、獎金、兼職、手術或額外收入、股利等「拿到的錢」，item 填收入來源（例如 醫院、學院）。收入不是消費，只有拿到錢才用這個分類。',
     '',
     '判斷 intent：',
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
@@ -255,18 +258,20 @@ function buildSystemPrompt_(today) {
     '  發票上的品項明細、小計、合計、應付、實付、信用卡簽單常出現同一個金額，只能記一次，不要重複記成多筆。',
     '- query：訊息在問花費統計（例如「這個月花多少」「上個月交通費」）。',
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
+    '  問收入（例如「這個月收入多少」）時 category 填「收入」。',
     '  問特定店家或品項（例如「全聯花多少」「這個月 7-11」）時，把店名或品項填在 keyword，分類用「全部」；否則 keyword 為空字串。',
     '  要求列出明細、清單、每一筆時 detail 為 true，否則為 false。',
     '- analysis：要求分析消費、看花費趨勢或和上個月比較（例如「幫我分析這個月的消費」「上個月花得比較多嗎」「本週分析」）。',
     '  把要分析的期間填在 query 的 start_date、end_date（沒指定就用本月 1 日到今天），其他 query 欄位填預設值。',
     '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
     '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
-    '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',
+    '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2，「每年」every 為 12。單次的消費請用 record，不是 recurring。',
+    '  固定收入（例如「每月5號薪水85000」）kind 填「收入」，其他 kind 填「支出」。',
     '- modify：修改或刪除已經記過的帳（例如「剛剛的午餐其實是150」「把昨天的停車費刪掉」「鯖魚那筆改成餐飲」）。',
     '  action 為 edit 或 delete；keyword、date、amount 用來找出那一筆（指最近一筆就留空），new_* 填要改成的值，不改的留空或 0。',
     '- other：閒聊或與記帳無關的訊息。',
     '',
-    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0；modify 填 edit、空字串與 0。'
+    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串、0 與「支出」；modify 填 edit、空字串與 0。'
   ].join('\n');
 }
 

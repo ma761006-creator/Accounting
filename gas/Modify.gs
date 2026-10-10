@@ -39,7 +39,7 @@ function parseModifyCommand_(text, today) {
   }
 
   // 提到固定支出的交給固定支出指令或 AI，不改帳本
-  if (/固定支出|訂閱/.test(t)) return null;
+  if (/固定支出|固定收入|訂閱/.test(t)) return null;
 
   // 「午餐改成150」「鯖魚改成 餐飲」
   var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);

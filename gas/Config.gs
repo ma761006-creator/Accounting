@@ -14,6 +14,9 @@
 /** 固定支出自動記帳時的記錄人：屬於全家，不屬於任何一位家人。 */
 var FAMILY_RECORDER = '🏠 全家';
 
+/** 收入記在同一本帳裡，分類是「收入」；支出的統計都會排除它。 */
+var INCOME_CATEGORY = '收入';
+
 var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '其他'];
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
