@@ -71,11 +71,18 @@ function readRows_() {
  *   rows 依日期排序，供列出明細
  */
 function summarize_(startDate, endDate, category, keyword) {
-  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, rows: [] };
+  // family：固定支出（全家共同），不算進個人
+  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, income: 0, rows: [] };
   var kw = String(keyword || '').toLowerCase();
   readRows_().forEach(function (r) {
     var date = r[COL.date];
     if (date < startDate || date > endDate) return;
+    // 收入另外算：查「全部」時只統計支出，另外附上收入總額
+    var isIncome = r[COL.category] === INCOME_CATEGORY;
+    if (isIncome && category !== INCOME_CATEGORY) {
+      if (category === '全部' && !kw) result.income += Number(r[COL.amount]) || 0;
+      return;
+    }
     if (category !== '全部' && r[COL.category] !== category) return;
     if (kw && (String(r[COL.item]) + ' ' + String(r[COL.note])).toLowerCase().indexOf(kw) < 0) return;
     var amount = Number(r[COL.amount]) || 0;
@@ -83,7 +90,11 @@ function summarize_(startDate, endDate, category, keyword) {
     result.total += amount;
     result.count += 1;
     result.byCategory[r[COL.category]] = (result.byCategory[r[COL.category]] || 0) + amount;
-    result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+    if (r[COL.source] === '固定支出' || r[COL.source] === '固定收入') {
+      result.family += amount;
+    } else {
+      result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+    }
   });
   result.rows.sort(function (a, b) {
     return a[COL.date] < b[COL.date] ? -1 : a[COL.date] > b[COL.date] ? 1 : 0;

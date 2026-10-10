@@ -37,11 +37,15 @@ function daysBetween_(a, b) {
 
 /** 統計一段期間，把固定支出和日常花費分開。 */
 function tally_(rows, start, end) {
-  var t = { total: 0, daily: 0, fixed: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
+  var t = { total: 0, daily: 0, fixed: 0, income: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
   rows.forEach(function (r) {
     var date = r[COL.date];
     if (date < start || date > end) return;
     var amount = Number(r[COL.amount]) || 0;
+    if (r[COL.category] === INCOME_CATEGORY) {
+      t.income += amount;
+      return;
+    }
     t.total += amount;
     t.count += 1;
     if (r[COL.source] === FIXED_SOURCE) {
@@ -85,7 +89,7 @@ function formatAnalysis_(a) {
   var cur = a.cur;
   var lines = ['📊 消費分析（' + md(a.start) + '～' + md(a.end) + '）'];
 
-  if (cur.count === 0) {
+  if (cur.count === 0 && !cur.income) {
     lines.push('這段期間沒有紀錄。');
     return lines.join('\n');
   }
@@ -96,6 +100,11 @@ function formatAnalysis_(a) {
     lines.push('💵 總支出 $' + formatMoney_(cur.total) + '（日常 $' + formatMoney_(cur.daily) + '＋固定支出 $' + formatMoney_(cur.fixed) + '）');
   } else {
     lines.push('💵 總支出 $' + formatMoney_(cur.total));
+  }
+  if (cur.income > 0) {
+    var saved = cur.income - cur.total;
+    lines.push('💰 收入 $' + formatMoney_(cur.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) +
+      '（存下 ' + Math.round((saved / cur.income) * 100) + '%）' : '⚠️ 赤字 $' + formatMoney_(-saved)));
   }
   lines.push('📅 日常花費平均每天 $' + formatMoney_(cur.daily / a.days) + '（' + a.days + ' 天）');
 
@@ -162,7 +171,7 @@ function formatAnalysis_(a) {
 
   var fixedNames = Object.keys(cur.fixedItems);
   if (fixedNames.length) {
-    lines.push('', '🔁 固定支出');
+    lines.push('', '🔁 固定支出（全家共同）');
     fixedNames.forEach(function (n) {
       lines.push('・' + n + ' $' + formatMoney_(cur.fixedItems[n]));
     });

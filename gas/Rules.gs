@@ -46,6 +46,8 @@ function getDefaultKeywords_() {
       '游泳', '運動中心', '球場', '遊戲', 'switch', 'steam', 'netflix', 'spotify', 'youtube', 'disney',
       '桌遊', '漫畫', '書店', '誠品'
     ],
+    // 收入：拿到的錢，不算在支出統計裡
+    '收入': ['收入', '薪水', '薪資', '獎金', '年終', '股利', '分紅', '入帳', '進帳'],
     '醫療': [
       '掛號', '看診', '診所', '醫院', '藥局', '藥', '牙醫', '牙科', '保健', '維他命', '眼科', '復健', '疫苗'
     ]
@@ -127,9 +129,10 @@ function parseEntry_(segment, today, keywords) {
 
   var category = null;
   var tokens = s.split(/\s+/);
-  if (tokens.length > 1 && CATEGORIES.indexOf(tokens[tokens.length - 1]) >= 0) {
+  var cats = CATEGORIES.concat([INCOME_CATEGORY]);
+  if (tokens.length > 1 && cats.indexOf(tokens[tokens.length - 1]) >= 0) {
     category = tokens.pop();
-  } else if (tokens.length > 1 && CATEGORIES.indexOf(tokens[0]) >= 0) {
+  } else if (tokens.length > 1 && cats.indexOf(tokens[0]) >= 0) {
     category = tokens.shift();
   }
   s = tokens.join(' ');
@@ -206,7 +209,7 @@ function parseQuery_(t, today) {
   var category = '全部';
   var tokens = s.split(/\s+/).filter(function (p) {
     if (!p) return false;
-    if (CATEGORIES.indexOf(p) >= 0) {
+    if (CATEGORIES.indexOf(p) >= 0 || p === INCOME_CATEGORY) {
       category = p;
       return false;
     }
@@ -215,7 +218,7 @@ function parseQuery_(t, today) {
   // 也接受「上個月餐飲」這種沒有空白的寫法
   if (category === '全部' && tokens.length) {
     var last = tokens[tokens.length - 1];
-    CATEGORIES.forEach(function (c) {
+    CATEGORIES.concat([INCOME_CATEGORY]).forEach(function (c) {
       if (category === '全部' && last.length > c.length && last.slice(-c.length) === c) {
         category = c;
         tokens[tokens.length - 1] = last.slice(0, -c.length);
@@ -400,6 +403,7 @@ function applyCustomKeywords_(entries) {
   });
   if (!custom.length) return entries;
   entries.forEach(function (e) {
+    if (e.category === INCOME_CATEGORY) return;
     var text = (e.item + ' ' + (e.note || '')).toLowerCase();
     for (var i = 0; i < custom.length; i++) {
       if (text.indexOf(custom[i].word) >= 0) {

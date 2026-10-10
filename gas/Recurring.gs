@@ -53,20 +53,24 @@ function processRecurring_(today) {
     var guard = 0;
     while (item.next <= today && guard < 12) {
       guard++;
+      var isIncome = item.category === INCOME_CATEGORY;
       if (item.amount > 0) {
         appendEntries_([{
           date: item.next,
           category: item.category,
           item: item.name,
           amount: item.amount,
-          note: '固定支出自動記帳'
+          note: isIncome ? '固定收入自動記帳' : '固定支出自動記帳'
         }], {
-          recorder: '🔁 固定支出',
+          // 固定支出、固定收入都是全家的，不算在任何一位家人身上
+          recorder: FAMILY_RECORDER,
           userId: '',
           messageId: 'recurring:' + item.name + ':' + item.next,
-          source: '固定支出'
+          source: isIncome ? '固定收入' : '固定支出'
         });
-        messages.push('🔁 已自動記帳：' + item.name + ' $' + formatMoney_(item.amount) + '（' + item.next + '）');
+        messages.push((isIncome ? '💰 已自動記收入：' : '🔁 已自動記帳：') + item.name + ' $' + formatMoney_(item.amount) + '（' + item.next + '）');
+      } else if (isIncome) {
+        messages.push('📅 今天是「' + item.name + '」入帳日，金額不固定。\n入帳後請傳「收入 ' + item.name + ' 金額」。');
       } else {
         messages.push('📅 今天是「' + item.name + '」繳費日，金額不固定。\n繳費後請傳「' + item.name + ' 金額」記帳。');
       }
@@ -74,7 +78,7 @@ function processRecurring_(today) {
       sheet.getRange(rowNumber, RCOL.next + 1).setValue(item.next);
     }
 
-    if (item.next === tomorrow) {
+    if (item.next === tomorrow && item.category !== INCOME_CATEGORY) {
       var amountText = item.amount > 0 ? ' $' + formatMoney_(item.amount) : '';
       messages.push('⏰ 提醒：明天（' + tomorrow + '）要繳「' + item.name + '」' + amountText);
     }
@@ -103,7 +107,7 @@ function readRecurringRow_(r) {
   return {
     name: name,
     amount: Math.round(Number(r[RCOL.amount])) || 0,
-    category: CATEGORIES.indexOf(category) >= 0 ? category : '其他',
+    category: CATEGORIES.indexOf(category) >= 0 || category === INCOME_CATEGORY ? category : '其他',
     day: day,
     every: Math.max(1, every),
     next: next
@@ -131,6 +135,19 @@ function daysInMonth_(y, m) {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
+/** 「每月 5 號」「每 2 個月 20 號」「每年 3/15」 */
+function cycleText_(item) {
+  if (item.every === 12 && item.next) return '每年 ' + (+item.next.slice(5, 7)) + '/' + item.day;
+  return (item.every === 1 ? '每月' : '每 ' + item.every + ' 個月') + ' ' + item.day + ' 號';
+}
+
+/** 從今天起算，下一個「month 月 day 號」。 */
+function nextYearlyDate_(today, month, day) {
+  var y = +today.slice(0, 4);
+  var thisYear = ymd_(y, month, Math.min(day, daysInMonth_(y, month)));
+  return thisYear >= today ? thisYear : ymd_(y + 1, month, Math.min(day, daysInMonth_(y + 1, month)));
+}
+
 /** 列出固定支出；filterName 有值時只列那一項。 */
 function formatRecurringList_(filterName) {
   var items = listRecurringItems_().filter(function (item) {
@@ -139,13 +156,21 @@ function formatRecurringList_(filterName) {
   if (items.length === 0) {
     return '目前沒有固定支出。\n' + recurringUsage_();
   }
-  var lines = items.map(function (item) {
+  var line = function (item) {
     var amount = item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
-    var cycle = item.every === 1 ? '每月' : '每 ' + item.every + ' 個月';
-    return '・' + item.name + '｜' + amount + '｜' + cycle + ' ' + item.day + ' 號｜下次 ' + (item.next || '未設定');
+    return '・' + item.name + '｜' + amount + '｜' + cycleText_(item) + '｜下次 ' + (item.next || '未設定');
+  };
+  var expenses = items.filter(function (item) {
+    return item.category !== INCOME_CATEGORY;
   });
-  var footer = filterName ? '' : '\n\n新增或修改：「固定支出 Netflix 390 每月15號」\n刪除：「固定支出 刪除 Netflix」';
-  return '🔁 固定支出\n' + lines.join('\n') + footer;
+  var incomes = items.filter(function (item) {
+    return item.category === INCOME_CATEGORY;
+  });
+  var parts = [];
+  if (expenses.length) parts.push('🔁 固定支出\n' + expenses.map(line).join('\n'));
+  if (incomes.length) parts.push('💰 固定收入\n' + incomes.map(line).join('\n'));
+  var footer = filterName ? '' : '\n\n新增或修改：「固定支出 Netflix 390 每月15號」「固定收入 薪水 85000 每月5號」\n刪除：「固定支出 刪除 Netflix」';
+  return parts.join('\n\n') + footer;
 }
 
 /** 建立「固定支出」工作表，預設放房租和水電（金額、扣款日請改成實際的）。 */
@@ -184,7 +209,7 @@ function parseRecurringCommand_(text) {
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
   // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
-  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)([\s\S]*)$/);
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
   if (!m) return null;
   var rest = m[2].trim();
   if (!rest) return { action: 'list' };
@@ -199,7 +224,7 @@ function parseRecurringCommand_(text) {
     return {
       action: 'batch',
       cmds: lines.map(function (line) {
-        var c = parseRecurringCommand_('固定支出 ' + line);
+        var c = parseRecurringCommand_(m[1] + ' ' + line);
         return c && c.action !== 'list' ? c : { action: 'invalid', line: line };
       })
     };
@@ -216,13 +241,17 @@ function parseRecurringCommand_(text) {
   var del = rest.match(/^(刪除|移除)\s*(.+)$/);
   if (del) return { action: 'delete', name: del[2].trim() };
 
-  var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, category: null };
+  var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, month: null, category: null };
   var nameParts = [];
   rest.split(/\s+/).forEach(function (token) {
     var cycleDay = token.match(/^每(月|(\d+)個?月)(?:(\d{1,2})(?:號|日)?)?$/);
+    var yearly = token.match(/^每年(?:(\d{1,2})月)?$/);
     var day = token.match(/^(\d{1,2})(號|日)$/);
     var amount = token.match(/^(\d+)(元)?$/);
-    if (cycleDay) {
+    if (yearly) {
+      cmd.every = 12;
+      if (yearly[1]) cmd.month = +yearly[1];
+    } else if (cycleDay) {
       cmd.every = cycleDay[2] ? +cycleDay[2] : 1;
       if (cycleDay[3]) cmd.day = +cycleDay[3];
     } else if (day) {
@@ -238,11 +267,13 @@ function parseRecurringCommand_(text) {
     }
   });
   cmd.name = nameParts.join(' ');
+  if (m[1] === '固定收入') cmd.category = INCOME_CATEGORY;
   if (!cmd.name) return { action: 'invalid' };
   // 沒有金額、日期、週期的不算指令（例如「固定支出好多」「固定支出有哪些」），交給問句判斷
   if (cmd.amount === null && !cmd.amountBlank && cmd.day === null && cmd.every === null && !cmd.category) return null;
   if (cmd.day !== null && !(cmd.day >= 1 && cmd.day <= 31)) return { action: 'invalid' };
   if (cmd.every !== null && !(cmd.every >= 1 && cmd.every <= 12)) return { action: 'invalid' };
+  if (cmd.month !== null && !(cmd.month >= 1 && cmd.month <= 12)) return { action: 'invalid' };
   return cmd;
 }
 
@@ -250,7 +281,7 @@ function parseRecurringCommand_(text) {
 function matchRecurringQuestion_(text) {
   var t = normalizeText_(text);
   var asking = /什麼時候|幾號|哪天|何時|多少|哪些|清單|列表|有沒有|查|[?？]/.test(t);
-  if (/固定支出|訂閱/.test(t) && asking) return '';
+  if (/固定支出|固定收入|訂閱/.test(t) && asking) return '';
   if (!asking) return null;
   var names = listRecurringItems_().map(function (item) {
     return item.name;
@@ -305,10 +336,12 @@ function applyRecurringCommand_(cmd, today) {
     var day = cmd.day || Math.round(Number(r[RCOL.day])) || +today.slice(8);
     var every = cmd.every || Math.round(Number(r[RCOL.every])) || 1;
     var amount = cmd.amountBlank ? '' : (cmd.amount !== null ? cmd.amount : r[RCOL.amount]);
-    var category = cmd.category || (CATEGORIES.indexOf(String(r[RCOL.category])) >= 0 ? String(r[RCOL.category]) : '其他');
+    var oldCategory = String(r[RCOL.category]);
+    var category = cmd.category || (CATEGORIES.indexOf(oldCategory) >= 0 || oldCategory === INCOME_CATEGORY ? oldCategory : '其他');
     var current = readRecurringRow_(r);
     // 改了扣款日或週期，或原本沒有下次扣款日，就重新計算
-    var next = (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
+    var next = cmd.month ? nextYearlyDate_(today, cmd.month, day)
+      : (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
     item = { name: name, amount: amount, category: category, day: day, every: every, next: next };
     sheet.getRange(rowNumber, 1, 1, RECURRING_HEADERS.length).setValues([[
       name, amount, category, day, every, next, '是'
@@ -317,7 +350,8 @@ function applyRecurringCommand_(cmd, today) {
     var newDay = cmd.day || +today.slice(8);
     var newEvery = cmd.every || 1;
     // 沒說幾號就用今天的日期，從下一期開始（今天這期多半已經付了）
-    var newNext = cmd.day ? firstDueDate_(today, newDay) : addMonths_(today, newEvery, newDay);
+    var newNext = cmd.month ? nextYearlyDate_(today, cmd.month, newDay)
+      : cmd.day ? firstDueDate_(today, newDay) : addMonths_(today, newEvery, newDay);
     item = {
       name: cmd.name,
       amount: cmd.amountBlank || cmd.amount === null ? '' : cmd.amount,
@@ -330,9 +364,13 @@ function applyRecurringCommand_(cmd, today) {
   }
 
   var amountText = item.amount !== '' && Number(item.amount) > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
-  var cycle = item.every === 1 ? '每月' : '每 ' + item.every + ' 個月';
+  if (item.category === INCOME_CATEGORY) {
+    return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定收入\n' +
+      '・' + item.name + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
+      '・下次入帳：' + item.next + '（當天自動記成收入）';
+  }
   return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定支出\n' +
-    '・' + item.name + '｜' + amountText + '｜' + cycle + ' ' + item.day + ' 號\n' +
+    '・' + item.name + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
     '・下次扣款：' + item.next + '（前一天會在群組提醒）';
 }
 
@@ -353,7 +391,9 @@ function recurringUsage_() {
     '・固定支出 Netflix 390 每月15號 → 新增或更新',
     '・固定支出 電費 不固定 每2個月 20號 → 金額不固定，只提醒',
     '・固定支出 房租 16000 → 只改金額',
-    '・固定支出 刪除 Netflix → 刪除'
+    '・固定支出 保險 36000 每年3月15號 → 一年一次',
+    '・固定支出 刪除 Netflix → 刪除',
+    '・固定收入 薪水 85000 每月5號 → 每月自動記收入'
   ].join('\n');
 }
 
@@ -368,7 +408,7 @@ function matchDueSoonQuestion_(text) {
 function formatDueSoon_(today, days) {
   var limit = addDays_(today, days - 1);
   var items = listRecurringItems_().filter(function (item) {
-    return item.next && item.next >= today && item.next <= limit;
+    return item.category !== INCOME_CATEGORY && item.next && item.next >= today && item.next <= limit;
   }).sort(function (a, b) {
     return a.next < b.next ? -1 : 1;
   });

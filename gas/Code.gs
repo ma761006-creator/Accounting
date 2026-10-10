@@ -26,6 +26,9 @@ function helpText_() {
     '🏷️ 分類關鍵字：關鍵字 健身房 其他、關鍵字（看清單）',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
+    '💰 收入：收入 醫院 85000、本月收入、固定收入 薪水 85000 每月5號',
+    '📋 年度計畫：年度計畫、存錢目標 100萬',
+    '',
     '分類：' + CATEGORIES.join('、'),
     '',
     '👇 也可以直接點下面的按鈕'
@@ -42,6 +45,8 @@ function mainMenu_() {
     { label: '📊 本月分析', text: '分析' },
     { label: '🔁 固定支出', text: '固定支出' },
     { label: '⏰ 扣款提醒', text: '近期扣款' },
+    { label: '💰 本月收入', text: '本月收入' },
+    { label: '📋 年度計畫', text: '年度計畫' },
     { label: '💰 怎麼記帳', text: '記帳' },
     { label: '✏️ 修改刪除', text: '修改' }
   ];
@@ -174,6 +179,11 @@ function handleEvent_(event) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
+    var planCmd = parsePlanCommand_(text);
+    if (planCmd) {
+      replyText_(event.replyToken, applyPlanCommand_(planCmd, today0), mainMenu_());
+      return;
+    }
     var keywordCmd = parseKeywordCommand_(text);
     if (keywordCmd) {
       replyText_(event.replyToken, withLock_(function () {
@@ -301,16 +311,24 @@ function dedupeReceiptEntries_(entries) {
 
 function formatRecorded_(entries, recorder, statedTotal) {
   var total = 0;
+  var incomeTotal = 0;
   var lines = entries.map(function (e) {
+    if (e.category === INCOME_CATEGORY) {
+      incomeTotal += e.amount;
+      return '・' + e.date + '｜💰 收入｜' + e.item + '｜$' + formatMoney_(e.amount);
+    }
     total += e.amount;
     var line = '・' + e.date + '｜' + e.category + '｜' + e.item + '｜$' + formatMoney_(e.amount);
     if (e.note) line += '（' + e.note + '）';
     return line;
   });
   var text = '✅ 已記帳（' + recorder + '）\n' + lines.join('\n');
-  if (entries.length > 1) {
-    text += '\n合計 $' + formatMoney_(total);
+  if (entries.length > 1 && total > 0 && incomeTotal > 0) {
+    text += '\n支出合計 $' + formatMoney_(total) + '｜收入合計 $' + formatMoney_(incomeTotal);
+  } else if (entries.length > 1) {
+    text += '\n合計 $' + formatMoney_(total || incomeTotal);
   }
+  if (!total && incomeTotal) total = incomeTotal;
   if (statedTotal) {
     text += statedTotal === total
       ? '（和你寫的總計相符）'
@@ -333,10 +351,15 @@ function formatSummary_(q, s) {
   if (filters.length) title += '（' + filters.join('・') + '）';
 
   if (s.count === 0) {
-    return title + '\n這段期間沒有紀錄。';
+    return title + '\n這段期間沒有' + (q.category === INCOME_CATEGORY ? '收入' : '支出') + '紀錄。' +
+      (s.income > 0 ? '\n💰 收入 $' + formatMoney_(s.income) : '');
   }
 
-  var lines = [title, '總計 $' + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  var lines = [title, (q.category === INCOME_CATEGORY ? '收入合計 $' : '總計 $') + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  if (s.income > 0) {
+    var saved = s.income - s.total;
+    lines.push('💰 收入 $' + formatMoney_(s.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) : '⚠️ 赤字 $' + formatMoney_(-saved)));
+  }
   if (s.count > 1) {
     var top = s.rows.reduce(function (a, r) {
       return !a || Number(r[COL.amount]) > Number(a[COL.amount]) ? r : a;
@@ -355,11 +378,12 @@ function formatSummary_(q, s) {
   }
 
   var recorders = Object.keys(s.byRecorder);
-  if (recorders.length > 1) {
+  if (recorders.length > 1 || (recorders.length && s.family > 0)) {
     lines.push('', '依記錄人：');
     recorders.forEach(function (name) {
       lines.push('・' + name + ' $' + formatMoney_(s.byRecorder[name]));
     });
+    if (s.family > 0) lines.push('・' + FAMILY_RECORDER + '（固定支出）$' + formatMoney_(s.family));
   }
 
   // 筆數少就直接列出明細，不用另外打「明細」

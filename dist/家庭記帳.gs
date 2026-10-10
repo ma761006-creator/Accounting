@@ -15,6 +15,12 @@
  */
 
 // 記帳分類。「其他」用來接住不屬於前四類的消費，不需要可以刪掉。
+/** 固定支出自動記帳時的記錄人：屬於全家，不屬於任何一位家人。 */
+var FAMILY_RECORDER = '🏠 全家';
+
+/** 收入記在同一本帳裡，分類是「收入」；支出的統計都會排除它。 */
+var INCOME_CATEGORY = '收入';
+
 var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '其他'];
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
@@ -122,11 +128,18 @@ function readRows_() {
  *   rows 依日期排序，供列出明細
  */
 function summarize_(startDate, endDate, category, keyword) {
-  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, rows: [] };
+  // family：固定支出（全家共同），不算進個人
+  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, income: 0, rows: [] };
   var kw = String(keyword || '').toLowerCase();
   readRows_().forEach(function (r) {
     var date = r[COL.date];
     if (date < startDate || date > endDate) return;
+    // 收入另外算：查「全部」時只統計支出，另外附上收入總額
+    var isIncome = r[COL.category] === INCOME_CATEGORY;
+    if (isIncome && category !== INCOME_CATEGORY) {
+      if (category === '全部' && !kw) result.income += Number(r[COL.amount]) || 0;
+      return;
+    }
     if (category !== '全部' && r[COL.category] !== category) return;
     if (kw && (String(r[COL.item]) + ' ' + String(r[COL.note])).toLowerCase().indexOf(kw) < 0) return;
     var amount = Number(r[COL.amount]) || 0;
@@ -134,7 +147,11 @@ function summarize_(startDate, endDate, category, keyword) {
     result.total += amount;
     result.count += 1;
     result.byCategory[r[COL.category]] = (result.byCategory[r[COL.category]] || 0) + amount;
-    result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+    if (r[COL.source] === '固定支出' || r[COL.source] === '固定收入') {
+      result.family += amount;
+    } else {
+      result.byRecorder[r[COL.recorder]] = (result.byRecorder[r[COL.recorder]] || 0) + amount;
+    }
   });
   result.rows.sort(function (a, b) {
     return a[COL.date] < b[COL.date] ? -1 : a[COL.date] > b[COL.date] ? 1 : 0;
@@ -328,6 +345,8 @@ function getDefaultKeywords_() {
       '游泳', '運動中心', '球場', '遊戲', 'switch', 'steam', 'netflix', 'spotify', 'youtube', 'disney',
       '桌遊', '漫畫', '書店', '誠品'
     ],
+    // 收入：拿到的錢，不算在支出統計裡
+    '收入': ['收入', '薪水', '薪資', '獎金', '年終', '股利', '分紅', '入帳', '進帳'],
     '醫療': [
       '掛號', '看診', '診所', '醫院', '藥局', '藥', '牙醫', '牙科', '保健', '維他命', '眼科', '復健', '疫苗'
     ]
@@ -409,9 +428,10 @@ function parseEntry_(segment, today, keywords) {
 
   var category = null;
   var tokens = s.split(/\s+/);
-  if (tokens.length > 1 && CATEGORIES.indexOf(tokens[tokens.length - 1]) >= 0) {
+  var cats = CATEGORIES.concat([INCOME_CATEGORY]);
+  if (tokens.length > 1 && cats.indexOf(tokens[tokens.length - 1]) >= 0) {
     category = tokens.pop();
-  } else if (tokens.length > 1 && CATEGORIES.indexOf(tokens[0]) >= 0) {
+  } else if (tokens.length > 1 && cats.indexOf(tokens[0]) >= 0) {
     category = tokens.shift();
   }
   s = tokens.join(' ');
@@ -488,7 +508,7 @@ function parseQuery_(t, today) {
   var category = '全部';
   var tokens = s.split(/\s+/).filter(function (p) {
     if (!p) return false;
-    if (CATEGORIES.indexOf(p) >= 0) {
+    if (CATEGORIES.indexOf(p) >= 0 || p === INCOME_CATEGORY) {
       category = p;
       return false;
     }
@@ -497,7 +517,7 @@ function parseQuery_(t, today) {
   // 也接受「上個月餐飲」這種沒有空白的寫法
   if (category === '全部' && tokens.length) {
     var last = tokens[tokens.length - 1];
-    CATEGORIES.forEach(function (c) {
+    CATEGORIES.concat([INCOME_CATEGORY]).forEach(function (c) {
       if (category === '全部' && last.length > c.length && last.slice(-c.length) === c) {
         category = c;
         tokens[tokens.length - 1] = last.slice(0, -c.length);
@@ -682,6 +702,7 @@ function applyCustomKeywords_(entries) {
   });
   if (!custom.length) return entries;
   entries.forEach(function (e) {
+    if (e.category === INCOME_CATEGORY) return;
     var text = (e.item + ' ' + (e.note || '')).toLowerCase();
     for (var i = 0; i < custom.length; i++) {
       if (text.indexOf(custom[i].word) >= 0) {
@@ -776,20 +797,24 @@ function processRecurring_(today) {
     var guard = 0;
     while (item.next <= today && guard < 12) {
       guard++;
+      var isIncome = item.category === INCOME_CATEGORY;
       if (item.amount > 0) {
         appendEntries_([{
           date: item.next,
           category: item.category,
           item: item.name,
           amount: item.amount,
-          note: '固定支出自動記帳'
+          note: isIncome ? '固定收入自動記帳' : '固定支出自動記帳'
         }], {
-          recorder: '🔁 固定支出',
+          // 固定支出、固定收入都是全家的，不算在任何一位家人身上
+          recorder: FAMILY_RECORDER,
           userId: '',
           messageId: 'recurring:' + item.name + ':' + item.next,
-          source: '固定支出'
+          source: isIncome ? '固定收入' : '固定支出'
         });
-        messages.push('🔁 已自動記帳：' + item.name + ' $' + formatMoney_(item.amount) + '（' + item.next + '）');
+        messages.push((isIncome ? '💰 已自動記收入：' : '🔁 已自動記帳：') + item.name + ' $' + formatMoney_(item.amount) + '（' + item.next + '）');
+      } else if (isIncome) {
+        messages.push('📅 今天是「' + item.name + '」入帳日，金額不固定。\n入帳後請傳「收入 ' + item.name + ' 金額」。');
       } else {
         messages.push('📅 今天是「' + item.name + '」繳費日，金額不固定。\n繳費後請傳「' + item.name + ' 金額」記帳。');
       }
@@ -797,7 +822,7 @@ function processRecurring_(today) {
       sheet.getRange(rowNumber, RCOL.next + 1).setValue(item.next);
     }
 
-    if (item.next === tomorrow) {
+    if (item.next === tomorrow && item.category !== INCOME_CATEGORY) {
       var amountText = item.amount > 0 ? ' $' + formatMoney_(item.amount) : '';
       messages.push('⏰ 提醒：明天（' + tomorrow + '）要繳「' + item.name + '」' + amountText);
     }
@@ -826,7 +851,7 @@ function readRecurringRow_(r) {
   return {
     name: name,
     amount: Math.round(Number(r[RCOL.amount])) || 0,
-    category: CATEGORIES.indexOf(category) >= 0 ? category : '其他',
+    category: CATEGORIES.indexOf(category) >= 0 || category === INCOME_CATEGORY ? category : '其他',
     day: day,
     every: Math.max(1, every),
     next: next
@@ -854,6 +879,19 @@ function daysInMonth_(y, m) {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
+/** 「每月 5 號」「每 2 個月 20 號」「每年 3/15」 */
+function cycleText_(item) {
+  if (item.every === 12 && item.next) return '每年 ' + (+item.next.slice(5, 7)) + '/' + item.day;
+  return (item.every === 1 ? '每月' : '每 ' + item.every + ' 個月') + ' ' + item.day + ' 號';
+}
+
+/** 從今天起算，下一個「month 月 day 號」。 */
+function nextYearlyDate_(today, month, day) {
+  var y = +today.slice(0, 4);
+  var thisYear = ymd_(y, month, Math.min(day, daysInMonth_(y, month)));
+  return thisYear >= today ? thisYear : ymd_(y + 1, month, Math.min(day, daysInMonth_(y + 1, month)));
+}
+
 /** 列出固定支出；filterName 有值時只列那一項。 */
 function formatRecurringList_(filterName) {
   var items = listRecurringItems_().filter(function (item) {
@@ -862,13 +900,21 @@ function formatRecurringList_(filterName) {
   if (items.length === 0) {
     return '目前沒有固定支出。\n' + recurringUsage_();
   }
-  var lines = items.map(function (item) {
+  var line = function (item) {
     var amount = item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
-    var cycle = item.every === 1 ? '每月' : '每 ' + item.every + ' 個月';
-    return '・' + item.name + '｜' + amount + '｜' + cycle + ' ' + item.day + ' 號｜下次 ' + (item.next || '未設定');
+    return '・' + item.name + '｜' + amount + '｜' + cycleText_(item) + '｜下次 ' + (item.next || '未設定');
+  };
+  var expenses = items.filter(function (item) {
+    return item.category !== INCOME_CATEGORY;
   });
-  var footer = filterName ? '' : '\n\n新增或修改：「固定支出 Netflix 390 每月15號」\n刪除：「固定支出 刪除 Netflix」';
-  return '🔁 固定支出\n' + lines.join('\n') + footer;
+  var incomes = items.filter(function (item) {
+    return item.category === INCOME_CATEGORY;
+  });
+  var parts = [];
+  if (expenses.length) parts.push('🔁 固定支出\n' + expenses.map(line).join('\n'));
+  if (incomes.length) parts.push('💰 固定收入\n' + incomes.map(line).join('\n'));
+  var footer = filterName ? '' : '\n\n新增或修改：「固定支出 Netflix 390 每月15號」「固定收入 薪水 85000 每月5號」\n刪除：「固定支出 刪除 Netflix」';
+  return parts.join('\n\n') + footer;
 }
 
 /** 建立「固定支出」工作表，預設放房租和水電（金額、扣款日請改成實際的）。 */
@@ -907,7 +953,7 @@ function parseRecurringCommand_(text) {
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
   // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
-  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)([\s\S]*)$/);
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
   if (!m) return null;
   var rest = m[2].trim();
   if (!rest) return { action: 'list' };
@@ -922,7 +968,7 @@ function parseRecurringCommand_(text) {
     return {
       action: 'batch',
       cmds: lines.map(function (line) {
-        var c = parseRecurringCommand_('固定支出 ' + line);
+        var c = parseRecurringCommand_(m[1] + ' ' + line);
         return c && c.action !== 'list' ? c : { action: 'invalid', line: line };
       })
     };
@@ -939,13 +985,17 @@ function parseRecurringCommand_(text) {
   var del = rest.match(/^(刪除|移除)\s*(.+)$/);
   if (del) return { action: 'delete', name: del[2].trim() };
 
-  var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, category: null };
+  var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, month: null, category: null };
   var nameParts = [];
   rest.split(/\s+/).forEach(function (token) {
     var cycleDay = token.match(/^每(月|(\d+)個?月)(?:(\d{1,2})(?:號|日)?)?$/);
+    var yearly = token.match(/^每年(?:(\d{1,2})月)?$/);
     var day = token.match(/^(\d{1,2})(號|日)$/);
     var amount = token.match(/^(\d+)(元)?$/);
-    if (cycleDay) {
+    if (yearly) {
+      cmd.every = 12;
+      if (yearly[1]) cmd.month = +yearly[1];
+    } else if (cycleDay) {
       cmd.every = cycleDay[2] ? +cycleDay[2] : 1;
       if (cycleDay[3]) cmd.day = +cycleDay[3];
     } else if (day) {
@@ -961,11 +1011,13 @@ function parseRecurringCommand_(text) {
     }
   });
   cmd.name = nameParts.join(' ');
+  if (m[1] === '固定收入') cmd.category = INCOME_CATEGORY;
   if (!cmd.name) return { action: 'invalid' };
   // 沒有金額、日期、週期的不算指令（例如「固定支出好多」「固定支出有哪些」），交給問句判斷
   if (cmd.amount === null && !cmd.amountBlank && cmd.day === null && cmd.every === null && !cmd.category) return null;
   if (cmd.day !== null && !(cmd.day >= 1 && cmd.day <= 31)) return { action: 'invalid' };
   if (cmd.every !== null && !(cmd.every >= 1 && cmd.every <= 12)) return { action: 'invalid' };
+  if (cmd.month !== null && !(cmd.month >= 1 && cmd.month <= 12)) return { action: 'invalid' };
   return cmd;
 }
 
@@ -973,7 +1025,7 @@ function parseRecurringCommand_(text) {
 function matchRecurringQuestion_(text) {
   var t = normalizeText_(text);
   var asking = /什麼時候|幾號|哪天|何時|多少|哪些|清單|列表|有沒有|查|[?？]/.test(t);
-  if (/固定支出|訂閱/.test(t) && asking) return '';
+  if (/固定支出|固定收入|訂閱/.test(t) && asking) return '';
   if (!asking) return null;
   var names = listRecurringItems_().map(function (item) {
     return item.name;
@@ -1028,10 +1080,12 @@ function applyRecurringCommand_(cmd, today) {
     var day = cmd.day || Math.round(Number(r[RCOL.day])) || +today.slice(8);
     var every = cmd.every || Math.round(Number(r[RCOL.every])) || 1;
     var amount = cmd.amountBlank ? '' : (cmd.amount !== null ? cmd.amount : r[RCOL.amount]);
-    var category = cmd.category || (CATEGORIES.indexOf(String(r[RCOL.category])) >= 0 ? String(r[RCOL.category]) : '其他');
+    var oldCategory = String(r[RCOL.category]);
+    var category = cmd.category || (CATEGORIES.indexOf(oldCategory) >= 0 || oldCategory === INCOME_CATEGORY ? oldCategory : '其他');
     var current = readRecurringRow_(r);
     // 改了扣款日或週期，或原本沒有下次扣款日，就重新計算
-    var next = (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
+    var next = cmd.month ? nextYearlyDate_(today, cmd.month, day)
+      : (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
     item = { name: name, amount: amount, category: category, day: day, every: every, next: next };
     sheet.getRange(rowNumber, 1, 1, RECURRING_HEADERS.length).setValues([[
       name, amount, category, day, every, next, '是'
@@ -1040,7 +1094,8 @@ function applyRecurringCommand_(cmd, today) {
     var newDay = cmd.day || +today.slice(8);
     var newEvery = cmd.every || 1;
     // 沒說幾號就用今天的日期，從下一期開始（今天這期多半已經付了）
-    var newNext = cmd.day ? firstDueDate_(today, newDay) : addMonths_(today, newEvery, newDay);
+    var newNext = cmd.month ? nextYearlyDate_(today, cmd.month, newDay)
+      : cmd.day ? firstDueDate_(today, newDay) : addMonths_(today, newEvery, newDay);
     item = {
       name: cmd.name,
       amount: cmd.amountBlank || cmd.amount === null ? '' : cmd.amount,
@@ -1053,9 +1108,13 @@ function applyRecurringCommand_(cmd, today) {
   }
 
   var amountText = item.amount !== '' && Number(item.amount) > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
-  var cycle = item.every === 1 ? '每月' : '每 ' + item.every + ' 個月';
+  if (item.category === INCOME_CATEGORY) {
+    return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定收入\n' +
+      '・' + item.name + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
+      '・下次入帳：' + item.next + '（當天自動記成收入）';
+  }
   return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定支出\n' +
-    '・' + item.name + '｜' + amountText + '｜' + cycle + ' ' + item.day + ' 號\n' +
+    '・' + item.name + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
     '・下次扣款：' + item.next + '（前一天會在群組提醒）';
 }
 
@@ -1076,7 +1135,9 @@ function recurringUsage_() {
     '・固定支出 Netflix 390 每月15號 → 新增或更新',
     '・固定支出 電費 不固定 每2個月 20號 → 金額不固定，只提醒',
     '・固定支出 房租 16000 → 只改金額',
-    '・固定支出 刪除 Netflix → 刪除'
+    '・固定支出 保險 36000 每年3月15號 → 一年一次',
+    '・固定支出 刪除 Netflix → 刪除',
+    '・固定收入 薪水 85000 每月5號 → 每月自動記收入'
   ].join('\n');
 }
 
@@ -1091,7 +1152,7 @@ function matchDueSoonQuestion_(text) {
 function formatDueSoon_(today, days) {
   var limit = addDays_(today, days - 1);
   var items = listRecurringItems_().filter(function (item) {
-    return item.next && item.next >= today && item.next <= limit;
+    return item.category !== INCOME_CATEGORY && item.next && item.next >= today && item.next <= limit;
   }).sort(function (a, b) {
     return a.next < b.next ? -1 : 1;
   });
@@ -1151,11 +1212,15 @@ function daysBetween_(a, b) {
 
 /** 統計一段期間，把固定支出和日常花費分開。 */
 function tally_(rows, start, end) {
-  var t = { total: 0, daily: 0, fixed: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
+  var t = { total: 0, daily: 0, fixed: 0, income: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
   rows.forEach(function (r) {
     var date = r[COL.date];
     if (date < start || date > end) return;
     var amount = Number(r[COL.amount]) || 0;
+    if (r[COL.category] === INCOME_CATEGORY) {
+      t.income += amount;
+      return;
+    }
     t.total += amount;
     t.count += 1;
     if (r[COL.source] === FIXED_SOURCE) {
@@ -1199,7 +1264,7 @@ function formatAnalysis_(a) {
   var cur = a.cur;
   var lines = ['📊 消費分析（' + md(a.start) + '～' + md(a.end) + '）'];
 
-  if (cur.count === 0) {
+  if (cur.count === 0 && !cur.income) {
     lines.push('這段期間沒有紀錄。');
     return lines.join('\n');
   }
@@ -1210,6 +1275,11 @@ function formatAnalysis_(a) {
     lines.push('💵 總支出 $' + formatMoney_(cur.total) + '（日常 $' + formatMoney_(cur.daily) + '＋固定支出 $' + formatMoney_(cur.fixed) + '）');
   } else {
     lines.push('💵 總支出 $' + formatMoney_(cur.total));
+  }
+  if (cur.income > 0) {
+    var saved = cur.income - cur.total;
+    lines.push('💰 收入 $' + formatMoney_(cur.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) +
+      '（存下 ' + Math.round((saved / cur.income) * 100) + '%）' : '⚠️ 赤字 $' + formatMoney_(-saved)));
   }
   lines.push('📅 日常花費平均每天 $' + formatMoney_(cur.daily / a.days) + '（' + a.days + ' 天）');
 
@@ -1276,7 +1346,7 @@ function formatAnalysis_(a) {
 
   var fixedNames = Object.keys(cur.fixedItems);
   if (fixedNames.length) {
-    lines.push('', '🔁 固定支出');
+    lines.push('', '🔁 固定支出（全家共同）');
     fixedNames.forEach(function (n) {
       lines.push('・' + n + ' $' + formatMoney_(cur.fixedItems[n]));
     });
@@ -1314,6 +1384,166 @@ function parseAnalysis_(text, today) {
   var q = parseQuery_(s, today);
   if (!q || q.keyword) return null;
   return { start_date: q.start_date, end_date: q.end_date, category: '全部', keyword: '', detail: false };
+}
+
+// ===== Plan.gs =====
+
+/**
+ * 年度收支計畫：依「個人收支計畫書」的格式，用固定收入、固定支出算出今年的計畫結餘，
+ * 再和今年實際記到的收入、支出比較，並顯示離存錢目標還差多少。
+ *
+ *   年度計畫／收支計畫／年度總結 → 顯示計畫
+ *   存錢目標 100萬               → 設定今年的存錢目標
+ *   存錢目標                     → 顯示計畫（含目標）
+ *   存錢目標 刪除                → 清除目標
+ *
+ * 存錢目標存在指令碼屬性 SAVING_GOAL，不需要另外的工作表。
+ */
+
+var SAVING_GOAL_PROP = 'SAVING_GOAL';
+
+function parsePlanCommand_(text) {
+  var t = normalizeText_(text).replace(/\s+/g, ' ').trim();
+  if (/^(年度|收支|今年)(計畫|計劃|總結|收支|規劃)$/.test(t) || /^(收支計畫|收支計劃)書?$/.test(t)) {
+    return { action: 'plan' };
+  }
+  var m = t.match(/^(?:今年)?(?:存錢|儲蓄|存款)目標\s*(.*)$/);
+  if (!m) return null;
+  var rest = m[1].replace(/^(設定|設為|改成|是|為|[:：])\s*/, '').trim();
+  if (!rest) return { action: 'plan' };
+  if (/^(刪除|清除|取消)$/.test(rest)) return { action: 'clearGoal' };
+  var amount = parseMoneyText_(rest);
+  return amount > 0 ? { action: 'setGoal', amount: amount } : { action: 'invalid' };
+}
+
+/** 「100萬」「1,000,000」「150萬元」「1.5萬」→ 數字；看不懂回傳 0。 */
+function parseMoneyText_(s) {
+  var m = String(s).replace(/元|塊/g, '').trim().match(/^(\d+(?:\.\d+)?)\s*(萬)?$/);
+  if (!m) return 0;
+  return Math.round(Number(m[1]) * (m[2] ? 10000 : 1));
+}
+
+function getSavingGoal_() {
+  var raw = getProp_(SAVING_GOAL_PROP, false);
+  var n = Math.round(Number(raw));
+  return n > 0 ? n : 0;
+}
+
+function applyPlanCommand_(cmd, today) {
+  var props = PropertiesService.getScriptProperties();
+  if (cmd.action === 'setGoal') {
+    props.setProperty(SAVING_GOAL_PROP, String(cmd.amount));
+    return '🎯 已設定今年存錢目標 $' + formatMoney_(cmd.amount) + '\n\n' + formatPlan_(today);
+  }
+  if (cmd.action === 'clearGoal') {
+    props.deleteProperty(SAVING_GOAL_PROP);
+    return '已清除存錢目標。';
+  }
+  if (cmd.action === 'invalid') {
+    return '存錢目標的用法：「存錢目標 100萬」「存錢目標 600000」\n看計畫：「年度計畫」';
+  }
+  return formatPlan_(today);
+}
+
+/** 一年發生幾次：每月 12 次、每 2 個月 6 次、每年 1 次。 */
+function timesPerYear_(every) {
+  return 12 / Math.max(1, every);
+}
+
+function formatPlan_(today) {
+  var year = today.slice(0, 4);
+  var items = listRecurringItems_();
+  var goal = getSavingGoal_();
+  var lines = ['📋 ' + year + ' 年度收支計畫'];
+
+  var section = function (title, list, unit) {
+    lines.push('', title);
+    var sum = 0;
+    if (!list.length) lines.push('・（還沒有設定）');
+    list.forEach(function (item) {
+      if (!(item.amount > 0)) {
+        lines.push('・' + item.name + '｜金額不固定（未計入）');
+        return;
+      }
+      var value = unit === 'year' ? item.amount * timesPerYear_(item.every) : item.amount;
+      sum += value;
+      var extra = unit === 'year' ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '）' : '';
+      lines.push('・' + item.name + ' $' + formatMoney_(value) + extra);
+    });
+    return sum;
+  };
+
+  // 貳、月淨收入：每月入帳的固定收入；每幾個月一次的收入平均到每月
+  var incomes = items.filter(function (i) {
+    return i.category === INCOME_CATEGORY;
+  });
+  var monthlyIncome = 0;
+  lines.push('', '貳、月淨收入（固定收入）');
+  if (!incomes.length) lines.push('・（還沒有設定，例如「固定收入 薪水 85000 每月5號」）');
+  incomes.forEach(function (item) {
+    if (!(item.amount > 0)) {
+      lines.push('・' + item.name + '｜金額不固定（未計入）');
+      return;
+    }
+    var perMonth = item.amount / Math.max(1, item.every);
+    monthlyIncome += perMonth;
+    lines.push('・' + item.name + ' $' + formatMoney_(perMonth) + (item.every > 1 ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '，平均每月）' : ''));
+  });
+  lines.push('合計 $' + formatMoney_(monthlyIncome) + ' × 12 = $' + formatMoney_(monthlyIncome * 12) + ' / 年');
+
+  // 參、月固定支出；肆、年固定支出（每幾個月一次的，換算成一年）
+  var expenses = items.filter(function (i) {
+    return i.category !== INCOME_CATEGORY;
+  });
+  var monthlyFixed = section('參、月固定支出', expenses.filter(function (i) {
+    return i.every === 1;
+  }), 'month');
+  lines.push('合計 $' + formatMoney_(monthlyFixed) + ' × 12 = $' + formatMoney_(monthlyFixed * 12) + ' / 年');
+  var yearlyFixed = section('肆、年固定支出（每幾個月或每年一次）', expenses.filter(function (i) {
+    return i.every > 1;
+  }), 'year');
+  lines.push('合計 $' + formatMoney_(yearlyFixed) + ' / 年');
+
+  // 伍、年度總結（計畫）
+  var a = monthlyIncome * 12;
+  var b = monthlyFixed * 12 + yearlyFixed;
+  var net = a - b;
+  lines.push('', '伍、年度總結（依固定收支）');
+  lines.push('・年淨收入（A）$' + formatMoney_(a));
+  lines.push('・年固定支出（B）$' + formatMoney_(b));
+  lines.push('・年度淨損益（A−B）' + (net >= 0 ? '+$' : '−$') + formatMoney_(Math.abs(net)) + (net >= 0 ? '（結餘）' : '（赤字）'));
+  lines.push('・平均每月 ' + (net >= 0 ? '+$' : '−$') + formatMoney_(Math.abs(net) / 12));
+  if (goal > 0) {
+    var gap = goal - net;
+    // 計畫只算固定收支，日常花費要從結餘裡出
+    lines.push('・存錢目標 $' + formatMoney_(goal) + '：' + (gap <= 0
+      ? '日常花費每月控制在 $' + formatMoney_(-gap / 12) + ' 以內就能達成'
+      : '固定收支就已經不夠，還差 $' + formatMoney_(gap) + '（每月要再多 $' + formatMoney_(gap / 12) + '）'));
+  }
+
+  // 今年實際：1/1 到今天記到的收入與支出（含日常花費）
+  var start = year + '-01-01';
+  var actualIncome = 0;
+  var actualExpense = 0;
+  readRows_().forEach(function (r) {
+    if (r[COL.date] < start || r[COL.date] > today) return;
+    var amount = Number(r[COL.amount]) || 0;
+    if (r[COL.category] === INCOME_CATEGORY) actualIncome += amount;
+    else actualExpense += amount;
+  });
+  var actualNet = actualIncome - actualExpense;
+  var months = +today.slice(5, 7) - 1 + (+today.slice(8)) / daysInMonth_(+year, +today.slice(5, 7));
+  lines.push('', '📊 今年實際（1/1～' + (+today.slice(5, 7)) + '/' + (+today.slice(8)) + '，含日常花費）');
+  lines.push('・收入 $' + formatMoney_(actualIncome));
+  lines.push('・支出 $' + formatMoney_(actualExpense));
+  lines.push('・' + (actualNet >= 0 ? '結餘 $' : '⚠️ 赤字 $') + formatMoney_(Math.abs(actualNet)));
+  if (goal > 0 && months > 0) {
+    var pace = actualNet / months * 12;
+    lines.push('・照目前速度，全年約可存 $' + formatMoney_(Math.max(0, pace)) + (pace >= goal ? '，可以達成目標 🎉' : '，離目標還差 $' + formatMoney_(goal - Math.max(0, pace))));
+  }
+  if (goal <= 0) lines.push('', '設定存錢目標：「存錢目標 100萬」');
+  if (!incomes.length) lines.push('記收入：「收入 醫院 85000」，或設定「固定收入 薪水 85000 每月5號」');
+  return lines.join('\n');
 }
 
 // ===== Modify.gs =====
@@ -1359,7 +1589,7 @@ function parseModifyCommand_(text, today) {
   }
 
   // 提到固定支出的交給固定支出指令或 AI，不改帳本
-  if (/固定支出|訂閱/.test(t)) return null;
+  if (/固定支出|固定收入|訂閱/.test(t)) return null;
 
   // 「午餐改成150」「鯖魚改成 餐飲」
   var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);
@@ -1730,7 +1960,7 @@ function parseMessage_(input, today) {
 function isFixedCommand_(text) {
   var t = normalizeText_(text).replace(/\s+/g, ' ');
   var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年)';
-  return new RegExp('^' + period + '( ?明細)?$').test(t) ||
+  return new RegExp('^' + period + '( ?(明細|收入))?( ?明細)?$').test(t) ||
     new RegExp('^' + period + '? ?分析$').test(t);
 }
 
@@ -1751,7 +1981,7 @@ function validateParsed_(parsed, today) {
     if (!(amount > 0) || !isFinite(amount) || !item) return null;
     return {
       date: isDate(e.date) && e.date <= today ? e.date : today,
-      category: CATEGORIES.indexOf(e.category) >= 0 ? e.category : '其他',
+      category: CATEGORIES.indexOf(e.category) >= 0 || e.category === INCOME_CATEGORY ? e.category : '其他',
       item: item.slice(0, 100),
       amount: amount,
       note: String(e.note || '').trim().slice(0, 200)
@@ -1772,7 +2002,7 @@ function validateParsed_(parsed, today) {
   var query = {
     start_date: start,
     end_date: end,
-    category: CATEGORIES.indexOf(q.category) >= 0 ? q.category : '全部',
+    category: CATEGORIES.indexOf(q.category) >= 0 || q.category === INCOME_CATEGORY ? q.category : '全部',
     keyword: String(q.keyword || '').trim().slice(0, 50),
     detail: q.detail === true
   };
@@ -1789,7 +2019,8 @@ function validateParsed_(parsed, today) {
     amountBlank: false,
     day: int(r.day, 1, 31),
     every: int(r.every, 1, 12),
-    category: null
+    month: null,
+    category: r.kind === '收入' ? INCOME_CATEGORY : null
   };
 
   var mo = parsed.modify || {};
@@ -1857,7 +2088,7 @@ function getParseSchema_() {
           type: 'object',
           properties: {
             date: { type: 'string', description: 'YYYY-MM-DD' },
-            category: { type: 'string', enum: CATEGORIES },
+            category: { type: 'string', enum: CATEGORIES.concat([INCOME_CATEGORY]) },
             item: { type: 'string' },
             amount: { type: 'number' },
             note: { type: 'string' }
@@ -1873,9 +2104,10 @@ function getParseSchema_() {
           name: { type: 'string' },
           amount: { type: 'number', description: '每期金額；沒提到或金額不固定填 0' },
           day: { type: 'number', description: '每月幾號扣款；沒提到填 0' },
-          every: { type: 'number', description: '每幾個月一期；沒提到填 0' }
+          every: { type: 'number', description: '每幾個月一期；沒提到填 0' },
+          kind: { type: 'string', enum: ['支出', '收入'], description: '固定收入（薪水等）填收入，其他填支出' }
         },
-        required: ['action', 'name', 'amount', 'day', 'every'],
+        required: ['action', 'name', 'amount', 'day', 'every', 'kind'],
         additionalProperties: false
       },
       modify: {
@@ -1897,7 +2129,7 @@ function getParseSchema_() {
         properties: {
           start_date: { type: 'string', description: 'YYYY-MM-DD' },
           end_date: { type: 'string', description: 'YYYY-MM-DD' },
-          category: { type: 'string', enum: ['全部'].concat(CATEGORIES) },
+          category: { type: 'string', enum: ['全部'].concat(CATEGORIES).concat([INCOME_CATEGORY]) },
           keyword: { type: 'string', description: '品項或店名關鍵字，沒有就空字串' },
           detail: { type: 'boolean', description: '是否要列出每一筆明細' }
         },
@@ -1925,6 +2157,7 @@ function buildSystemPrompt_(today) {
     '- 娛樂：電影、KTV、遊樂園、展覽、演唱會、健身房、運動、遊戲、影音串流、興趣嗜好',
     '- 寵物：飼料、罐頭、貓砂、寵物用品、美容、寄宿，以及寵物的看診、疫苗、結紮（不算醫療）',
     '- 其他：不屬於以上分類的消費',
+    '- 收入：薪水、獎金、兼職、手術或額外收入、股利等「拿到的錢」，item 填收入來源（例如 醫院、學院）。收入不是消費，只有拿到錢才用這個分類。',
     '',
     '判斷 intent：',
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
@@ -1937,18 +2170,20 @@ function buildSystemPrompt_(today) {
     '  發票上的品項明細、小計、合計、應付、實付、信用卡簽單常出現同一個金額，只能記一次，不要重複記成多筆。',
     '- query：訊息在問花費統計（例如「這個月花多少」「上個月交通費」）。',
     '  請填 query 的日期區間（含頭尾）與分類，沒指定分類就用「全部」。沒指定期間就用本月 1 日到今天。',
+    '  問收入（例如「這個月收入多少」）時 category 填「收入」。',
     '  問特定店家或品項（例如「全聯花多少」「這個月 7-11」）時，把店名或品項填在 keyword，分類用「全部」；否則 keyword 為空字串。',
     '  要求列出明細、清單、每一筆時 detail 為 true，否則為 false。',
     '- analysis：要求分析消費、看花費趨勢或和上個月比較（例如「幫我分析這個月的消費」「上個月花得比較多嗎」「本週分析」）。',
     '  把要分析的期間填在 query 的 start_date、end_date（沒指定就用本月 1 日到今天），其他 query 欄位填預設值。',
     '- recurring：新增、修改、刪除或詢問固定支出／訂閱（例如「我每個月訂 Netflix 390，15 號扣款」「房租改成 16000」「取消 Netflix」「我有哪些訂閱」）。',
     '  action：新增或修改用 upsert，刪除或取消用 delete，詢問用 list。name 為項目名稱（例如 Netflix、房租）。',
-    '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2。單次的消費請用 record，不是 recurring。',
+    '  amount、day、every 沒提到就填 0；「兩個月一期」every 為 2，「每年」every 為 12。單次的消費請用 record，不是 recurring。',
+    '  固定收入（例如「每月5號薪水85000」）kind 填「收入」，其他 kind 填「支出」。',
     '- modify：修改或刪除已經記過的帳（例如「剛剛的午餐其實是150」「把昨天的停車費刪掉」「鯖魚那筆改成餐飲」）。',
     '  action 為 edit 或 delete；keyword、date、amount 用來找出那一筆（指最近一筆就留空），new_* 填要改成的值，不改的留空或 0。',
     '- other：閒聊或與記帳無關的訊息。',
     '',
-    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串與 0；modify 填 edit、空字串與 0。'
+    '不適用的欄位：entries 填空陣列；query 填今天日期、「全部」、空字串 keyword 與 false；recurring 填 list、空字串、0 與「支出」；modify 填 edit、空字串與 0。'
   ].join('\n');
 }
 
@@ -2162,6 +2397,9 @@ function helpText_() {
     '🏷️ 分類關鍵字：關鍵字 健身房 其他、關鍵字（看清單）',
     '⏰ 扣款提醒：近期扣款（另外每天早上會自動提醒）',
     '',
+    '💰 收入：收入 醫院 85000、本月收入、固定收入 薪水 85000 每月5號',
+    '📋 年度計畫：年度計畫、存錢目標 100萬',
+    '',
     '分類：' + CATEGORIES.join('、'),
     '',
     '👇 也可以直接點下面的按鈕'
@@ -2178,6 +2416,8 @@ function mainMenu_() {
     { label: '📊 本月分析', text: '分析' },
     { label: '🔁 固定支出', text: '固定支出' },
     { label: '⏰ 扣款提醒', text: '近期扣款' },
+    { label: '💰 本月收入', text: '本月收入' },
+    { label: '📋 年度計畫', text: '年度計畫' },
     { label: '💰 怎麼記帳', text: '記帳' },
     { label: '✏️ 修改刪除', text: '修改' }
   ];
@@ -2310,6 +2550,11 @@ function handleEvent_(event) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
+    var planCmd = parsePlanCommand_(text);
+    if (planCmd) {
+      replyText_(event.replyToken, applyPlanCommand_(planCmd, today0), mainMenu_());
+      return;
+    }
     var keywordCmd = parseKeywordCommand_(text);
     if (keywordCmd) {
       replyText_(event.replyToken, withLock_(function () {
@@ -2437,16 +2682,24 @@ function dedupeReceiptEntries_(entries) {
 
 function formatRecorded_(entries, recorder, statedTotal) {
   var total = 0;
+  var incomeTotal = 0;
   var lines = entries.map(function (e) {
+    if (e.category === INCOME_CATEGORY) {
+      incomeTotal += e.amount;
+      return '・' + e.date + '｜💰 收入｜' + e.item + '｜$' + formatMoney_(e.amount);
+    }
     total += e.amount;
     var line = '・' + e.date + '｜' + e.category + '｜' + e.item + '｜$' + formatMoney_(e.amount);
     if (e.note) line += '（' + e.note + '）';
     return line;
   });
   var text = '✅ 已記帳（' + recorder + '）\n' + lines.join('\n');
-  if (entries.length > 1) {
-    text += '\n合計 $' + formatMoney_(total);
+  if (entries.length > 1 && total > 0 && incomeTotal > 0) {
+    text += '\n支出合計 $' + formatMoney_(total) + '｜收入合計 $' + formatMoney_(incomeTotal);
+  } else if (entries.length > 1) {
+    text += '\n合計 $' + formatMoney_(total || incomeTotal);
   }
+  if (!total && incomeTotal) total = incomeTotal;
   if (statedTotal) {
     text += statedTotal === total
       ? '（和你寫的總計相符）'
@@ -2469,10 +2722,15 @@ function formatSummary_(q, s) {
   if (filters.length) title += '（' + filters.join('・') + '）';
 
   if (s.count === 0) {
-    return title + '\n這段期間沒有紀錄。';
+    return title + '\n這段期間沒有' + (q.category === INCOME_CATEGORY ? '收入' : '支出') + '紀錄。' +
+      (s.income > 0 ? '\n💰 收入 $' + formatMoney_(s.income) : '');
   }
 
-  var lines = [title, '總計 $' + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  var lines = [title, (q.category === INCOME_CATEGORY ? '收入合計 $' : '總計 $') + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  if (s.income > 0) {
+    var saved = s.income - s.total;
+    lines.push('💰 收入 $' + formatMoney_(s.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) : '⚠️ 赤字 $' + formatMoney_(-saved)));
+  }
   if (s.count > 1) {
     var top = s.rows.reduce(function (a, r) {
       return !a || Number(r[COL.amount]) > Number(a[COL.amount]) ? r : a;
@@ -2491,11 +2749,12 @@ function formatSummary_(q, s) {
   }
 
   var recorders = Object.keys(s.byRecorder);
-  if (recorders.length > 1) {
+  if (recorders.length > 1 || (recorders.length && s.family > 0)) {
     lines.push('', '依記錄人：');
     recorders.forEach(function (name) {
       lines.push('・' + name + ' $' + formatMoney_(s.byRecorder[name]));
     });
+    if (s.family > 0) lines.push('・' + FAMILY_RECORDER + '（固定支出）$' + formatMoney_(s.family));
   }
 
   // 筆數少就直接列出明細，不用另外打「明細」
