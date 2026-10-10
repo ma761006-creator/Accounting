@@ -184,10 +184,26 @@ function parseRecurringCommand_(text) {
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
   // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
-  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)(.*)$/);
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)([\s\S]*)$/);
   if (!m) return null;
   var rest = m[2].trim();
   if (!rest) return { action: 'list' };
+
+  // 一次設定多項：「固定支出」後面每一行一項
+  var lines = rest.split(/\n+/).map(function (l) {
+    return l.trim();
+  }).filter(function (l) {
+    return l;
+  });
+  if (lines.length > 1) {
+    return {
+      action: 'batch',
+      cmds: lines.map(function (line) {
+        var c = parseRecurringCommand_('固定支出 ' + line);
+        return c && c.action !== 'list' ? c : { action: 'invalid', line: line };
+      })
+    };
+  }
   // 「房租9900元每月1號」這種黏在一起的寫法，先拆成「房租 9900 每月 1號」
   rest = rest
     .replace(/每\s*(\d+)\s*個?月/g, ' 每$1個月 ')
@@ -259,6 +275,12 @@ function listRecurringItems_() {
 
 /** 執行固定支出指令，回傳要回覆的文字。 */
 function applyRecurringCommand_(cmd, today) {
+  if (cmd.action === 'batch') {
+    return cmd.cmds.map(function (c) {
+      if (c.action === 'invalid') return '⚠️ 看不懂「' + (c.line || '') + '」，請寫成「名稱 金額 每月幾號」';
+      return applyRecurringCommand_(c, today);
+    }).join('\n\n');
+  }
   if (cmd.action === 'list') return formatRecurringList_();
   if (cmd.action === 'invalid') return recurringUsage_();
 
