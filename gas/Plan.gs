@@ -72,13 +72,13 @@ function formatPlan_(today) {
     if (!list.length) lines.push('・（還沒有設定）');
     list.forEach(function (item) {
       if (!(item.amount > 0)) {
-        lines.push('・' + item.name + '｜金額不固定（未計入）');
+        lines.push('・' + recurringLabel_(item) + '｜金額不固定（未計入）');
         return;
       }
       var value = unit === 'year' ? item.amount * timesPerYear_(item.every) : item.amount;
       sum += value;
       var extra = unit === 'year' ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '）' : '';
-      lines.push('・' + item.name + ' $' + formatMoney_(value) + extra);
+      lines.push('・' + recurringLabel_(item) + ' $' + formatMoney_(value) + extra);
     });
     return sum;
   };
@@ -92,12 +92,12 @@ function formatPlan_(today) {
   if (!incomes.length) lines.push('・（還沒有設定，例如「固定收入 薪水 85000 每月5號」）');
   incomes.forEach(function (item) {
     if (!(item.amount > 0)) {
-      lines.push('・' + item.name + '｜金額不固定（未計入）');
+      lines.push('・' + recurringLabel_(item) + '｜金額不固定（未計入）');
       return;
     }
     var perMonth = item.amount / Math.max(1, item.every);
     monthlyIncome += perMonth;
-    lines.push('・' + item.name + ' $' + formatMoney_(perMonth) + (item.every > 1 ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '，平均每月）' : ''));
+    lines.push('・' + recurringLabel_(item) + ' $' + formatMoney_(perMonth) + (item.every > 1 ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '，平均每月）' : ''));
   });
   lines.push('合計 $' + formatMoney_(monthlyIncome) + ' × 12 = $' + formatMoney_(monthlyIncome * 12) + ' / 年');
 

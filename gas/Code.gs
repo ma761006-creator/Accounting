@@ -165,8 +165,9 @@ function handleEvent_(event) {
     var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
     var recurringCmd = parseRecurringCommand_(text);
     if (recurringCmd) {
+      var setter = getDisplayName_(event.source);
       replyText_(event.replyToken, withLock_(function () {
-        return applyRecurringCommand_(recurringCmd, today0);
+        return applyRecurringCommand_(recurringCmd, today0, setter);
       }));
       return;
     }
@@ -241,8 +242,9 @@ function handleEvent_(event) {
   }
 
   if (parsed.intent === 'recurring') {
+    var recurringSetter = getDisplayName_(event.source);
     replyText_(event.replyToken, withLock_(function () {
-      return applyRecurringCommand_(parsed.recurring, today);
+      return applyRecurringCommand_(parsed.recurring, today, recurringSetter);
     }));
     return;
   }

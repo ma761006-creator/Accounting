@@ -746,7 +746,8 @@ function startOfWeek_(ymd) {
  * 固定支出：房租、水電這類定期的花費。
  *
  * 試算表「固定支出」工作表每列一項：
- *   名稱 | 金額 | 分類 | 扣款日 | 每幾個月 | 下次扣款日 | 啟用
+ *   名稱 | 金額 | 分類 | 扣款日 | 每幾個月 | 下次扣款日 | 啟用 | 成員
+ * - 成員：設定的家人。不同家人可以有同名的項目（例如各自的薪水、電話費）；空白代表全家共用。
  * - 金額有填：到了下次扣款日自動記帳。
  * - 金額空白（例如每期不同的水電費）：只提醒，繳費後再自己記。
  * - 扣款前一天會在群組提醒。
@@ -755,8 +756,13 @@ function startOfWeek_(ymd) {
  */
 
 var RECURRING_SHEET_NAME = '固定支出';
-var RECURRING_HEADERS = ['名稱', '金額', '分類', '扣款日', '每幾個月', '下次扣款日', '啟用'];
-var RCOL = { name: 0, amount: 1, category: 2, day: 3, every: 4, next: 5, enabled: 6 };
+var RECURRING_HEADERS = ['名稱', '金額', '分類', '扣款日', '每幾個月', '下次扣款日', '啟用', '成員'];
+var RCOL = { name: 0, amount: 1, category: 2, day: 3, every: 4, next: 5, enabled: 6, owner: 7 };
+
+/** 「薪水（媽媽）」；全家共用的只顯示名稱。 */
+function recurringLabel_(item) {
+  return item.owner ? item.name + '（' + item.owner + '）' : item.name;
+}
 
 /** 每日執行：自動記帳到期的固定支出，並提醒明天要扣款的項目。 */
 function dailyJob() {
@@ -806,17 +812,17 @@ function processRecurring_(today) {
           amount: item.amount,
           note: isIncome ? '固定收入自動記帳' : '固定支出自動記帳'
         }], {
-          // 固定支出、固定收入都是全家的，不算在任何一位家人身上
-          recorder: FAMILY_RECORDER,
+          // 記錄人寫設定的家人（全家共用的寫「全家」）；查詢時固定收支一律歸在全家
+          recorder: item.owner || FAMILY_RECORDER,
           userId: '',
-          messageId: 'recurring:' + item.name + ':' + item.next,
+          messageId: 'recurring:' + item.name + ':' + item.owner + ':' + item.next,
           source: isIncome ? '固定收入' : '固定支出'
         });
-        messages.push((isIncome ? '💰 已自動記收入：' : '🔁 已自動記帳：') + item.name + ' $' + formatMoney_(item.amount) + '（' + item.next + '）');
+        messages.push((isIncome ? '💰 已自動記收入：' : '🔁 已自動記帳：') + recurringLabel_(item) + ' $' + formatMoney_(item.amount) + '（' + item.next + '）');
       } else if (isIncome) {
-        messages.push('📅 今天是「' + item.name + '」入帳日，金額不固定。\n入帳後請傳「收入 ' + item.name + ' 金額」。');
+        messages.push('📅 今天是「' + recurringLabel_(item) + '」入帳日，金額不固定。\n入帳後請傳「收入 ' + item.name + ' 金額」。');
       } else {
-        messages.push('📅 今天是「' + item.name + '」繳費日，金額不固定。\n繳費後請傳「' + item.name + ' 金額」記帳。');
+        messages.push('📅 今天是「' + recurringLabel_(item) + '」繳費日，金額不固定。\n繳費後請傳「' + item.name + ' 金額」記帳。');
       }
       item.next = addMonths_(item.next, item.every, item.day);
       sheet.getRange(rowNumber, RCOL.next + 1).setValue(item.next);
@@ -824,7 +830,7 @@ function processRecurring_(today) {
 
     if (item.next === tomorrow && item.category !== INCOME_CATEGORY) {
       var amountText = item.amount > 0 ? ' $' + formatMoney_(item.amount) : '';
-      messages.push('⏰ 提醒：明天（' + tomorrow + '）要繳「' + item.name + '」' + amountText);
+      messages.push('⏰ 提醒：明天（' + tomorrow + '）要繳「' + recurringLabel_(item) + '」' + amountText);
     }
   });
   return messages;
@@ -854,7 +860,8 @@ function readRecurringRow_(r) {
     category: CATEGORIES.indexOf(category) >= 0 || category === INCOME_CATEGORY ? category : '其他',
     day: day,
     every: Math.max(1, every),
-    next: next
+    next: next,
+    owner: String(r[RCOL.owner] || '').trim()
   };
 }
 
@@ -902,7 +909,7 @@ function formatRecurringList_(filterName) {
   }
   var line = function (item) {
     var amount = item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
-    return '・' + item.name + '｜' + amount + '｜' + cycleText_(item) + '｜下次 ' + (item.next || '未設定');
+    return '・' + recurringLabel_(item) + '｜' + amount + '｜' + cycleText_(item) + '｜下次 ' + (item.next || '未設定');
   };
   var expenses = items.filter(function (item) {
     return item.category !== INCOME_CATEGORY;
@@ -924,8 +931,8 @@ function ensureRecurringSheet_(today) {
   var sheet = ss.insertSheet(RECURRING_SHEET_NAME);
   sheet.appendRow(RECURRING_HEADERS);
   // 房租：金額請填上；水電：台灣多為兩個月一期且金額不固定，預設只提醒
-  sheet.appendRow(['房租', '', '其他', 5, 1, firstDueDate_(today, 5), '是']);
-  sheet.appendRow(['水電', '', '其他', 20, 2, firstDueDate_(today, 20), '是']);
+  sheet.appendRow(['房租', '', '其他', 5, 1, firstDueDate_(today, 5), '是', '']);
+  sheet.appendRow(['水電', '', '其他', 20, 2, firstDueDate_(today, 20), '是', '']);
   sheet.setFrozenRows(1);
 }
 
@@ -983,7 +990,12 @@ function parseRecurringCommand_(text) {
     .trim();
 
   var del = rest.match(/^(刪除|移除)\s*(.+)$/);
-  if (del) return { action: 'delete', name: del[2].trim() };
+  if (del) {
+    var delName = del[2].trim();
+    var delOwner = delName.match(/^(.+?)\s*[（(]\s*(.+?)\s*[)）]$/);
+    if (!delOwner) return { action: 'delete', name: delName };
+    return { action: 'delete', name: delOwner[1], owner: delOwner[2] === '全家' ? '' : delOwner[2] };
+  }
 
   var cmd = { action: 'upsert', name: '', amount: null, amountBlank: false, day: null, every: null, month: null, category: null };
   var nameParts = [];
@@ -1011,6 +1023,13 @@ function parseRecurringCommand_(text) {
     }
   });
   cmd.name = nameParts.join(' ');
+  // 「薪水（媽媽）」指定是哪位家人的
+  var ownerMatch = cmd.name.match(/^(.+?)\s*[（(]\s*(.+?)\s*[)）]$/);
+  if (ownerMatch) {
+    cmd.name = ownerMatch[1];
+    // 「房租（全家）」：全家共用，不屬於任何一位家人
+    cmd.owner = ownerMatch[2] === '全家' ? '' : ownerMatch[2];
+  }
   if (m[1] === '固定收入') cmd.category = INCOME_CATEGORY;
   if (!cmd.name) return { action: 'invalid' };
   // 沒有金額、日期、週期的不算指令（例如「固定支出好多」「固定支出有哪些」），交給問句判斷
@@ -1049,11 +1068,11 @@ function listRecurringItems_() {
 }
 
 /** 執行固定支出指令，回傳要回覆的文字。 */
-function applyRecurringCommand_(cmd, today) {
+function applyRecurringCommand_(cmd, today, setter) {
   if (cmd.action === 'batch') {
     return cmd.cmds.map(function (c) {
       if (c.action === 'invalid') return '⚠️ 看不懂「' + (c.line || '') + '」，請寫成「名稱 金額 每月幾號」';
-      return applyRecurringCommand_(c, today);
+      return applyRecurringCommand_(c, today, setter);
     }).join('\n\n');
   }
   if (cmd.action === 'list') return formatRecurringList_();
@@ -1065,13 +1084,23 @@ function applyRecurringCommand_(cmd, today) {
     ensureRecurringSheet_(today);
     sheet = ss.getSheetByName(RECURRING_SHEET_NAME);
   }
-  var rowNumber = findRecurringRow_(sheet, cmd.name);
+  if (String(sheet.getRange(1, RCOL.owner + 1).getValue() || '') === '') {
+    sheet.getRange(1, RCOL.owner + 1).setValue('成員');
+  }
+  // 項目屬於設定的人；「薪水（媽媽）」可以指定別人
+  var owner = String(cmd.owner !== undefined && cmd.owner !== null ? cmd.owner : setter || '').trim();
 
   if (cmd.action === 'delete') {
-    if (!rowNumber) return '找不到固定支出「' + cmd.name + '」。傳「固定支出」可以看目前的項目。';
-    sheet.deleteRow(rowNumber);
-    return '🗑️ 已刪除固定支出「' + cmd.name + '」';
+    var target = findRecurringRow_(sheet, cmd.name, owner, true);
+    if (target === -1) {
+      return '有好幾位家人都有「' + cmd.name + '」，請指定是誰的，例如「固定支出 刪除 ' + cmd.name + '（媽媽）」。';
+    }
+    if (!target) return '找不到固定支出「' + cmd.name + '」。傳「固定支出」可以看目前的項目。';
+    var deletedOwner = String(sheet.getRange(target, RCOL.owner + 1).getValue() || '').trim();
+    sheet.deleteRow(target);
+    return '🗑️ 已刪除「' + recurringLabel_({ name: cmd.name, owner: deletedOwner }) + '」';
   }
+  var rowNumber = findRecurringRow_(sheet, cmd.name, owner, false);
 
   var item;
   if (rowNumber) {
@@ -1086,9 +1115,11 @@ function applyRecurringCommand_(cmd, today) {
     // 改了扣款日或週期，或原本沒有下次扣款日，就重新計算
     var next = cmd.month ? nextYearlyDate_(today, cmd.month, day)
       : (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
-    item = { name: name, amount: amount, category: category, day: day, every: every, next: next };
+    // 原本沒有成員（舊資料）的，改成這位家人的
+    var rowOwner = String(r[RCOL.owner] || '').trim() || owner;
+    item = { name: name, amount: amount, category: category, day: day, every: every, next: next, owner: rowOwner };
     sheet.getRange(rowNumber, 1, 1, RECURRING_HEADERS.length).setValues([[
-      name, amount, category, day, every, next, '是'
+      name, amount, category, day, every, next, '是', rowOwner
     ]]);
   } else {
     var newDay = cmd.day || +today.slice(8);
@@ -1102,30 +1133,58 @@ function applyRecurringCommand_(cmd, today) {
       category: cmd.category || guessCategory_(cmd.name, loadKeywords_()),
       day: newDay,
       every: newEvery,
-      next: newNext
+      next: newNext,
+      owner: owner
     };
-    sheet.appendRow([item.name, item.amount, item.category, item.day, item.every, item.next, '是']);
+    sheet.appendRow([item.name, item.amount, item.category, item.day, item.every, item.next, '是', item.owner]);
+    // 別的家人已經有同名項目：提醒這是另外一筆，避免房租這類共用支出算兩次
+    var others = listRecurringItems_().filter(function (x) {
+      return x.name.toLowerCase() === item.name.toLowerCase() && x.owner !== item.owner;
+    });
+    if (others.length) {
+      var notice = '\n\n⚠️ ' + others.map(recurringLabel_).join('、') + ' 也有「' + item.name + '」，這是另外一筆。' +
+        '\n如果是同一筆，請傳「固定支出 刪除 ' + recurringLabel_(item) + '」。';
+    }
   }
 
   var amountText = item.amount !== '' && Number(item.amount) > 0 ? '$' + formatMoney_(item.amount) : '金額不固定（只提醒）';
   if (item.category === INCOME_CATEGORY) {
     return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定收入\n' +
-      '・' + item.name + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
-      '・下次入帳：' + item.next + '（當天自動記成收入）';
+      '・' + recurringLabel_(item) + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
+      '・下次入帳：' + item.next + '（當天自動記成收入）' + (notice || '');
   }
   return (rowNumber ? '✏️ 已更新' : '✅ 已新增') + '固定支出\n' +
-    '・' + item.name + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
-    '・下次扣款：' + item.next + '（前一天會在群組提醒）';
+    '・' + recurringLabel_(item) + '｜' + amountText + '｜' + cycleText_(item) + '\n' +
+    '・下次扣款：' + item.next + '（前一天會在群組提醒）' + (notice || '');
 }
 
-function findRecurringRow_(sheet, name) {
+/**
+ * 找出要更新或刪除的那一列。
+ * - 名稱和成員都相同的優先
+ * - 其次是同名、沒有成員的（舊資料或全家共用）
+ * - 刪除時：只有一列同名就是它；好幾位家人都有同名的回傳 -1，請對方指定
+ */
+function findRecurringRow_(sheet, name, owner, forDelete) {
   if (sheet.getLastRow() < 2) return 0;
-  var names = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, RECURRING_HEADERS.length).getValues();
   var target = String(name).trim().toLowerCase();
-  for (var i = 0; i < names.length; i++) {
-    if (String(names[i][0]).trim().toLowerCase() === target) return i + 2;
+  var who = String(owner || '').trim();
+  var same = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][RCOL.name]).trim().toLowerCase() === target) {
+      same.push({ row: i + 2, owner: String(rows[i][RCOL.owner] || '').trim() });
+    }
   }
-  return 0;
+  var exact = same.filter(function (x) {
+    return x.owner === who;
+  })[0];
+  if (exact) return exact.row;
+  var shared = same.filter(function (x) {
+    return !x.owner;
+  })[0];
+  if (!forDelete) return shared ? shared.row : 0;
+  if (same.length === 1) return same[0].row;
+  return same.length > 1 ? -1 : 0;
 }
 
 function recurringUsage_() {
@@ -1137,7 +1196,10 @@ function recurringUsage_() {
     '・固定支出 房租 16000 → 只改金額',
     '・固定支出 保險 36000 每年3月15號 → 一年一次',
     '・固定支出 刪除 Netflix → 刪除',
-    '・固定收入 薪水 85000 每月5號 → 每月自動記收入'
+    '・固定收入 薪水 85000 每月5號 → 每月自動記收入',
+    '',
+    '每一項都算設定的那位家人的，家人可以各自有「薪水」「電話費」；',
+    '全家共用的寫「房租（全家）」，指定別人的寫「薪水（媽媽）」。'
   ].join('\n');
 }
 
@@ -1164,7 +1226,7 @@ function formatDueSoon_(today, days) {
     var left = daysBetween_(today, item.next);
     var when = left === 0 ? '今天' : left === 1 ? '明天' : left + ' 天後';
     if (item.amount > 0) total += item.amount;
-    return '・' + (+item.next.slice(5, 7)) + '/' + (+item.next.slice(8)) + '（' + when + '）' + item.name + '｜' +
+    return '・' + (+item.next.slice(5, 7)) + '/' + (+item.next.slice(8)) + '（' + when + '）' + recurringLabel_(item) + '｜' +
       (item.amount > 0 ? '$' + formatMoney_(item.amount) : '金額不固定');
   });
   return '⏰ 接下來 ' + days + ' 天要扣款\n' + lines.join('\n') +
@@ -1462,13 +1524,13 @@ function formatPlan_(today) {
     if (!list.length) lines.push('・（還沒有設定）');
     list.forEach(function (item) {
       if (!(item.amount > 0)) {
-        lines.push('・' + item.name + '｜金額不固定（未計入）');
+        lines.push('・' + recurringLabel_(item) + '｜金額不固定（未計入）');
         return;
       }
       var value = unit === 'year' ? item.amount * timesPerYear_(item.every) : item.amount;
       sum += value;
       var extra = unit === 'year' ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '）' : '';
-      lines.push('・' + item.name + ' $' + formatMoney_(value) + extra);
+      lines.push('・' + recurringLabel_(item) + ' $' + formatMoney_(value) + extra);
     });
     return sum;
   };
@@ -1482,12 +1544,12 @@ function formatPlan_(today) {
   if (!incomes.length) lines.push('・（還沒有設定，例如「固定收入 薪水 85000 每月5號」）');
   incomes.forEach(function (item) {
     if (!(item.amount > 0)) {
-      lines.push('・' + item.name + '｜金額不固定（未計入）');
+      lines.push('・' + recurringLabel_(item) + '｜金額不固定（未計入）');
       return;
     }
     var perMonth = item.amount / Math.max(1, item.every);
     monthlyIncome += perMonth;
-    lines.push('・' + item.name + ' $' + formatMoney_(perMonth) + (item.every > 1 ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '，平均每月）' : ''));
+    lines.push('・' + recurringLabel_(item) + ' $' + formatMoney_(perMonth) + (item.every > 1 ? '（' + cycleText_(item) + ' $' + formatMoney_(item.amount) + '，平均每月）' : ''));
   });
   lines.push('合計 $' + formatMoney_(monthlyIncome) + ' × 12 = $' + formatMoney_(monthlyIncome * 12) + ' / 年');
 
@@ -2536,8 +2598,9 @@ function handleEvent_(event) {
     var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
     var recurringCmd = parseRecurringCommand_(text);
     if (recurringCmd) {
+      var setter = getDisplayName_(event.source);
       replyText_(event.replyToken, withLock_(function () {
-        return applyRecurringCommand_(recurringCmd, today0);
+        return applyRecurringCommand_(recurringCmd, today0, setter);
       }));
       return;
     }
@@ -2612,8 +2675,9 @@ function handleEvent_(event) {
   }
 
   if (parsed.intent === 'recurring') {
+    var recurringSetter = getDisplayName_(event.source);
     replyText_(event.replyToken, withLock_(function () {
-      return applyRecurringCommand_(parsed.recurring, today);
+      return applyRecurringCommand_(parsed.recurring, today, recurringSetter);
     }));
     return;
   }

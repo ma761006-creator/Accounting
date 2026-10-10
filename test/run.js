@@ -37,6 +37,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     setFrozenRows: () => {},
     deleteRow: (n) => data.splice(n - 1, 1),
     getRange: (row, col, numRows, numCols) => ({
+      getValue: () => (data[row - 1] && data[row - 1][col - 1] !== undefined ? data[row - 1][col - 1] : ''),
       setValue: (v) => {
         while (data[row - 1].length < col) data[row - 1].push('');
         data[row - 1][col - 1] = toCell(v);
@@ -298,9 +299,9 @@ test('固定支出一次設定多項（每行一項，金額有 $）', () => {
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '固定支出\n股票定期定額 $8000 每月6號\n手續費 $2\n電話費 $1,478' });
   const reply = env.replies[0];
-  assert.match(reply, /股票定期定額｜\$8,000｜每月 6 號/);
-  assert.match(reply, /手續費｜\$2｜每月/);
-  assert.match(reply, /電話費｜\$1,478｜每月/);
+  assert.match(reply, /股票定期定額（爸爸）｜\$8,000｜每月 6 號/);
+  assert.match(reply, /手續費（爸爸）｜\$2｜每月/);
+  assert.match(reply, /電話費（爸爸）｜\$1,478｜每月/);
   const names = env.sheets['固定支出'].data.slice(1).map((r) => r[0] + '|' + r[1]);
   ['股票定期定額|8000', '手續費|2', '電話費|1478'].forEach((n) => assert.ok(names.includes(n), n));
 });
@@ -662,7 +663,7 @@ test('修改固定支出：開頭有「修改」、金額日期黏在一起也�
   const env = createEnv([], RULES);
   env.post({ type: 'text', id: '1', text: '宵夜 75' });
   env.post({ type: 'text', id: '2', text: '修改固定支出房租 9900元每月1號' });
-  assert.match(env.replies[1], /固定支出[\s\S]*房租｜\$9,900｜每月 1 號/);
+  assert.match(env.replies[1], /固定支出[\s\S]*房租（爸爸）｜\$9,900｜每月 1 號/);
   assert.strictEqual(env.rows[1][3], '宵夜'); // 帳本那筆沒被改名
   const r = (t) => JSON.stringify(env.context.parseRecurringCommand_(t));
   assert.strictEqual(r('固定支出房租9900元每月1號'), r('固定支出 房租 9900 每月1號'));
@@ -753,9 +754,9 @@ test('存錢目標與年度收支計畫', () => {
   env.post({ type: 'text', id: 'g', text: '存錢目標 100萬' });
   const plan = env.replies[env.replies.length - 1];
   assert.match(plan, /已設定今年存錢目標 \$1,000,000/);
-  assert.match(plan, /貳、月淨收入[\s\S]*醫院 \$100,000[\s\S]*合計 \$100,000 × 12 = \$1,200,000/);
-  assert.match(plan, /參、月固定支出[\s\S]*房租 \$20,000/);
-  assert.match(plan, /肆、年固定支出[\s\S]*保險 \$36,000/);
+  assert.match(plan, /貳、月淨收入[\s\S]*醫院（爸爸） \$100,000[\s\S]*合計 \$100,000 × 12 = \$1,200,000/);
+  assert.match(plan, /參、月固定支出[\s\S]*房租（爸爸） \$20,000/);
+  assert.match(plan, /肆、年固定支出[\s\S]*保險（爸爸） \$36,000/);
   // 年淨收入 1,200,000 − 年固定支出（20,000×12 + 36,000 = 276,000）= 924,000
   assert.match(plan, /年固定支出（B）\$276,000/);
   assert.match(plan, /年度淨損益（A−B）\+\$924,000（結餘）/);
@@ -764,6 +765,35 @@ test('存錢目標與年度收支計畫', () => {
   env.post({ type: 'text', id: 'p', text: '年度計畫' });
   assert.match(env.replies[env.replies.length - 1], /^📋 \d{4} 年度收支計畫/);
   assert.strictEqual(env.claudeRequests.length, 0);
+});
+
+test('不同家人的固定收支是不同筆，同名也不會互相覆蓋', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const mom = { type: 'group', groupId: 'G1', userId: 'Umom' };
+  env.post({ type: 'text', id: '1', text: '固定收入 薪水 85000 每月5號' });
+  env.post({ type: 'text', id: '2', text: '固定收入 薪水 60000 每月10號' }, mom);
+  assert.match(env.replies[1], /已新增固定收入[\s\S]*薪水（媽媽）｜\$60,000/);
+  assert.match(env.replies[1], /⚠️ 薪水（爸爸） 也有「薪水」，這是另外一筆/);
+  const rows = () => env.sheets['固定支出'].data.slice(1).filter((r) => r[0] === '薪水').map((r) => r[1] + '|' + r[7]).sort();
+  assert.deepStrictEqual(rows(), ['60000|媽媽', '85000|爸爸']);
+
+  // 各自修改自己的，不會改到對方
+  env.post({ type: 'text', id: '3', text: '固定收入 薪水 62000' }, mom);
+  assert.deepStrictEqual(rows(), ['62000|媽媽', '85000|爸爸']);
+
+  // 自動記收入：記錄人是各自的家人，查詢時固定收支仍歸在全家
+  const msgs = env.context.processRecurring_('2026-11-10');
+  assert.ok(msgs.some((m) => /薪水（爸爸） \$85,000/.test(m)), msgs.join('\n'));
+  assert.ok(msgs.some((m) => /薪水（媽媽） \$62,000/.test(m)), msgs.join('\n'));
+
+  // 全家共用與刪除時指定是誰的
+  env.post({ type: 'text', id: '4', text: '固定支出 房租（全家） 20000 每月1號' });
+  assert.match(env.replies[3], /・房租｜\$20,000/);
+  const ambiguous = env.context.applyRecurringCommand_(env.context.parseRecurringCommand_('固定支出 刪除 薪水'), '2026-10-09', '小孩');
+  assert.match(ambiguous, /有好幾位家人都有「薪水」，請指定是誰的/);
+  env.post({ type: 'text', id: '6', text: '固定支出 刪除 薪水（媽媽）' });
+  assert.deepStrictEqual(rows(), ['85000|爸爸']);
 });
 
 test('查詢回覆：10 筆以內直接列出明細', () => {
@@ -899,25 +929,25 @@ test('固定支出：用 LINE 新增、修改、刪除與詢問', () => {
   const netflix = sheet.data[3];
   assert.strictEqual(netflix[1], 390);
   assert.strictEqual(fmt(netflix[5]), env.context.firstDueDate_(today, 15));
-  assert.match(env.replies[0], /✅ 已新增固定支出\n・Netflix｜\$390｜每月 15 號/);
+  assert.match(env.replies[0], /✅ 已新增固定支出\n・Netflix（爸爸）｜\$390｜每月 15 號/);
 
   const rentNextBefore = fmt(sheet.data[1][5]);
   env.post({ type: 'text', id: '2', text: '固定支出 房租 16000' });
   assert.strictEqual(sheet.data[1][1], 16000);
   assert.strictEqual(fmt(sheet.data[1][5]), rentNextBefore); // 只改金額，下次扣款日不變
-  assert.match(env.replies[1], /✏️ 已更新固定支出\n・房租｜\$16,000｜每月 5 號/);
+  assert.match(env.replies[1], /✏️ 已更新固定支出\n・房租（爸爸）｜\$16,000｜每月 5 號/);
 
   env.post({ type: 'text', id: '3', text: '固定支出 電費 不固定 每2個月 20號' });
-  assert.match(env.replies[2], /電費｜金額不固定（只提醒）｜每 2 個月 20 號/);
+  assert.match(env.replies[2], /電費（爸爸）｜金額不固定（只提醒）｜每 2 個月 20 號/);
 
   env.post({ type: 'text', id: '4', text: '固定支出 刪除 netflix' });
   assert.strictEqual(names(), '房租,水電,電費');
-  assert.match(env.replies[3], /已刪除固定支出「netflix」/);
+  assert.match(env.replies[3], /已刪除「netflix（爸爸）」/);
 
   env.post({ type: 'text', id: '5', text: '我有哪些固定支出？' });
   assert.match(env.replies[4], /房租.*\n.*水電.*\n.*電費/);
   env.post({ type: 'text', id: '6', text: '房租什麼時候繳' });
-  assert.match(env.replies[5], /^🔁 固定支出\n・房租｜\$16,000/);
+  assert.match(env.replies[5], /^🔁 固定支出\n・房租（爸爸）｜\$16,000/);
   assert.ok(!/水電/.test(env.replies[5]));
 
   // 群組閒聊不會誤建項目；「Netflix 訂閱 390」仍是一般記帳
