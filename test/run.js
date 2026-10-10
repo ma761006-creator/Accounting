@@ -78,7 +78,8 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     CacheService: {
       getScriptCache: () => ({
         get: (k) => cacheStore.get(k) || null,
-        put: (k, v) => cacheStore.set(k, v)
+        put: (k, v) => cacheStore.set(k, v),
+        remove: (k) => cacheStore.delete(k)
       })
     },
     ScriptApp: {
@@ -261,12 +262,47 @@ test('刪除：只刪自己最近一次的紀錄', () => {
   env.post({ type: 'text', id: '2', text: '午餐 100 飲料 50' });
   env.post({ type: 'text', id: '3', text: '公車 15' }, { type: 'group', groupId: 'G1', userId: 'Umom' });
   env.post({ type: 'text', id: '4', text: '刪除' });
+  // 一次會刪到多筆時先確認，還沒刪
+  assert.match(env.replies[3], /你最近一次記了 2 筆[\s\S]*確認刪除/);
+  assert.strictEqual(env.rows.length, 5);
 
+  env.post({ type: 'text', id: '5', text: '確認刪除' });
   const items = env.rows.slice(1).map((r) => r[3]);
   assert.deepStrictEqual(items, ['早餐', '公車']);
-  assert.match(env.replies[3], /已刪除/);
-  assert.match(env.replies[3], /午餐/);
-  assert.match(env.replies[3], /飲料/);
+  assert.match(env.replies[4], /已刪除/);
+  assert.match(env.replies[4], /午餐/);
+  assert.match(env.replies[4], /飲料/);
+  assert.match(env.replies[4], /傳「恢復」/);
+
+  // 恢復：刪掉的兩筆加回來，內容不變
+  env.post({ type: 'text', id: '6', text: '恢復' });
+  assert.match(env.replies[5], /已恢復 2 筆/);
+  const restored = env.rows.slice(1).map((r) => r[3] + '|' + r[4] + '|' + r[5]).sort();
+  assert.deepStrictEqual(restored, ['公車|15|媽媽', '午餐|100|爸爸', '早餐|80|爸爸', '飲料|50|爸爸']);
+  env.post({ type: 'text', id: '7', text: '恢復' });
+  assert.match(env.replies[6], /沒有可以恢復/);
+});
+
+test('恢復：復原上一次的修改', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '宵夜 75' });
+  env.post({ type: 'text', id: '2', text: '修改 120' });
+  assert.strictEqual(env.rows[1][4], 120);
+  env.post({ type: 'text', id: '3', text: '恢復' });
+  assert.match(env.replies[2], /已恢復修改前的內容/);
+  assert.strictEqual(env.rows[1][4], 75);
+  assert.strictEqual(env.rows[1][3], '宵夜');
+});
+
+test('固定支出一次設定多項（每行一項，金額有 $）', () => {
+  const env = createEnv([], RULES);
+  env.post({ type: 'text', id: '1', text: '固定支出\n股票定期定額 $8000 每月6號\n手續費 $2\n電話費 $1,478' });
+  const reply = env.replies[0];
+  assert.match(reply, /股票定期定額｜\$8,000｜每月 6 號/);
+  assert.match(reply, /手續費｜\$2｜每月/);
+  assert.match(reply, /電話費｜\$1,478｜每月/);
+  const names = env.sheets['固定支出'].data.slice(1).map((r) => r[0] + '|' + r[1]);
+  ['股票定期定額|8000', '手續費|2', '電話費|1478'].forEach((n) => assert.ok(names.includes(n), n));
 });
 
 test('群組閒聊不回覆、私訊會提示', () => {

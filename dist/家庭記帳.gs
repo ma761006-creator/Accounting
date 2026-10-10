@@ -907,10 +907,26 @@ function parseRecurringCommand_(text) {
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月');
   // 「修改固定支出房租…」「設定固定支出…」：開頭的動詞不影響意思
-  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)(.*)$/);
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|新增|改)?\s*(固定支出|訂閱)([\s\S]*)$/);
   if (!m) return null;
   var rest = m[2].trim();
   if (!rest) return { action: 'list' };
+
+  // 一次設定多項：「固定支出」後面每一行一項
+  var lines = rest.split(/\n+/).map(function (l) {
+    return l.trim();
+  }).filter(function (l) {
+    return l;
+  });
+  if (lines.length > 1) {
+    return {
+      action: 'batch',
+      cmds: lines.map(function (line) {
+        var c = parseRecurringCommand_('固定支出 ' + line);
+        return c && c.action !== 'list' ? c : { action: 'invalid', line: line };
+      })
+    };
+  }
   // 「房租9900元每月1號」這種黏在一起的寫法，先拆成「房租 9900 每月 1號」
   rest = rest
     .replace(/每\s*(\d+)\s*個?月/g, ' 每$1個月 ')
@@ -982,6 +998,12 @@ function listRecurringItems_() {
 
 /** 執行固定支出指令，回傳要回覆的文字。 */
 function applyRecurringCommand_(cmd, today) {
+  if (cmd.action === 'batch') {
+    return cmd.cmds.map(function (c) {
+      if (c.action === 'invalid') return '⚠️ 看不懂「' + (c.line || '') + '」，請寫成「名稱 金額 每月幾號」';
+      return applyRecurringCommand_(c, today);
+    }).join('\n\n');
+  }
   if (cmd.action === 'list') return formatRecurringList_();
   if (cmd.action === 'invalid') return recurringUsage_();
 
@@ -1322,6 +1344,10 @@ function parseModifyCommand_(text, today) {
   // 「重複記帳了，刪除」「刪除重複」：刪掉自己最近重複的那筆
   if (/重複|重覆|記兩次|記了兩次/.test(t) && /刪|移除|取消|撤銷/.test(t)) return { action: 'dedupe' };
 
+  // 復原上一次的刪除或修改
+  if (/^(恢復|復原|還原|取消刪除|撤銷刪除|undo)$/i.test(t)) return { action: 'undo' };
+  if (/^確認刪除$/.test(t)) return { action: 'delete', keyword: '', date: '', amount: null, confirmed: true };
+
   // 「取消」只能單獨使用；指定刪除哪筆要用「刪除」，避免「取消聚餐」這種聊天誤刪
   if (t === '取消') return { action: 'delete', keyword: '', date: '', amount: null };
   var del = t.match(/^刪除\s*(.*)$/);
@@ -1500,15 +1526,80 @@ function deleteDuplicates_(userId) {
   return dups;
 }
 
+/**
+ * 記住上一次的刪除或修改，傳「恢復」可以復原（6 小時內，每人只記最近一次）。
+ * 刪除：存整列內容，恢復時加回帳本。修改：存修改前後的內容，該列沒再被改過才還原。
+ */
+var UNDO_TTL_SECONDS = 6 * 60 * 60;
+
+function rowToText_(values) {
+  return values.map(function (v, i) {
+    if (v instanceof Date) {
+      return Utilities.formatDate(v, TIMEZONE, i === COL.date ? 'yyyy-MM-dd' : 'yyyy-MM-dd HH:mm:ss');
+    }
+    // 訊息 ID 要維持文字，避免長數字失去精度
+    return i === COL.messageId ? "'" + v : v;
+  });
+}
+
+function saveUndo_(userId, payload) {
+  try {
+    CacheService.getScriptCache().put('undo:' + userId, JSON.stringify(payload), UNDO_TTL_SECONDS);
+  } catch (e) {
+    console.warn('無法記住復原資料：' + e);
+  }
+}
+
+function applyUndo_(userId) {
+  var cache = CacheService.getScriptCache();
+  var raw = cache.get('undo:' + userId);
+  if (!raw) return '沒有可以恢復的動作（只能恢復 6 小時內自己最近一次的刪除或修改）。';
+  var undo = JSON.parse(raw);
+  var sheet = getLedgerSheet_();
+  if (undo.type === 'delete') {
+    undo.rows.forEach(function (values) {
+      sheet.appendRow(values);
+    });
+    cache.remove('undo:' + userId);
+    return '↩️ 已恢復 ' + undo.rows.length + ' 筆：\n' + undo.rows.map(function (v) {
+      return '・' + v[COL.date] + ' ' + v[COL.category] + ' ' + v[COL.item] + ' $' + formatMoney_(v[COL.amount]);
+    }).join('\n');
+  }
+  if (undo.type === 'edit') {
+    var lastRow = sheet.getLastRow();
+    var row = undo.row;
+    var current = row <= lastRow ? sheet.getRange(row, 1, 1, HEADERS.length).getValues()[0] : null;
+    var same = current && String(current[COL.item]) === String(undo.after[COL.item]) &&
+      Number(current[COL.amount]) === Number(undo.after[COL.amount]) &&
+      String(current[COL.category]) === String(undo.after[COL.category]) &&
+      current[COL.userId] === userId;
+    if (!same) return '那筆帳之後又被改過或刪掉了，無法自動恢復，請直接修改。';
+    sheet.getRange(row, COL.category + 1).setValue(undo.before[COL.category]);
+    sheet.getRange(row, COL.item + 1).setValue(undo.before[COL.item]);
+    sheet.getRange(row, COL.amount + 1).setValue(undo.before[COL.amount]);
+    cache.remove('undo:' + userId);
+    return '↩️ 已恢復修改前的內容：' + undo.before[COL.date] + ' ' + undo.before[COL.category] + ' ' +
+      undo.before[COL.item] + ' $' + formatMoney_(undo.before[COL.amount]);
+  }
+  return '沒有可以恢復的動作。';
+}
+
 /** 執行修改或刪除，回傳回覆文字。 */
 function applyModifyCommand_(cmd, userId) {
   if (cmd.action === 'invalid') return cmd.usage;
+  if (cmd.action === 'undo') return applyUndo_(userId);
   if (cmd.action === 'dedupe') {
     var removed = deleteDuplicates_(userId);
     if (!removed.length) return '你最近記的帳沒有重複的。\n要刪最近一筆請傳「刪除」，指定哪一筆例如「刪除 健身房」。';
+    saveUndo_(userId, {
+      type: 'delete',
+      rows: removed.map(function (x) {
+        return rowToText_(x.values);
+      })
+    });
     return '🗑️ 已刪除重複的 ' + removed.length + ' 筆（保留第一筆）：\n' + removed.map(function (x) {
       return '・' + describeRow_(x.values);
-    }).join('\n');
+    }).join('\n') + '\n\n刪錯了？傳「恢復」就能復原。';
   }
   var found = findTargetRows_(userId, cmd);
   if (found.rows.length === 0) {
@@ -1521,13 +1612,26 @@ function applyModifyCommand_(cmd, userId) {
   var sheet = getLedgerSheet_();
 
   if (cmd.action === 'delete') {
+    // 只傳「刪除」卻會刪掉好幾筆時，先列出來請對方確認，避免一次誤刪多筆
+    var noCriteria = !cmd.keyword && !cmd.date && !cmd.amount;
+    if (noCriteria && found.rows.length > 1 && !cmd.confirmed) {
+      return '你最近一次記了 ' + found.rows.length + ' 筆：\n' + found.rows.map(function (x) {
+        return '・' + describeRow_(x.values);
+      }).join('\n') + '\n\n全部刪除請傳「確認刪除」；只刪一筆請傳「刪除 ' + found.rows[0].values[COL.item] + '」。';
+    }
+    saveUndo_(userId, {
+      type: 'delete',
+      rows: found.rows.map(function (x) {
+        return rowToText_(x.values);
+      })
+    });
     // 由下往上刪，列號才不會跑掉
     for (var i = found.rows.length - 1; i >= 0; i--) {
       sheet.deleteRow(found.rows[i].row);
     }
     return '🗑️ 已刪除：\n' + found.rows.map(function (x) {
       return '・' + describeRow_(x.values);
-    }).join('\n');
+    }).join('\n') + '\n\n刪錯了？傳「恢復」就能復原。';
   }
 
   if (found.rows.length > 1) {
@@ -1539,6 +1643,7 @@ function applyModifyCommand_(cmd, userId) {
 
   var target = found.rows[0];
   var before = describeRow_(target.values);
+  var beforeValues = rowToText_(target.values);
   var after = target.values.slice();
   if (cmd.newAmount > 0) {
     sheet.getRange(target.row, COL.amount + 1).setValue(cmd.newAmount);
@@ -1552,7 +1657,8 @@ function applyModifyCommand_(cmd, userId) {
     sheet.getRange(target.row, COL.item + 1).setValue(cmd.newItem);
     after[COL.item] = cmd.newItem;
   }
-  return '✏️ 已修改\n・原本：' + before + '\n・改成：' + describeRow_(after);
+  saveUndo_(userId, { type: 'edit', row: target.row, before: beforeValues, after: rowToText_(after) });
+  return '✏️ 已修改\n・原本：' + before + '\n・改成：' + describeRow_(after) + '\n改錯了？傳「恢復」就能復原。';
 }
 
 function modifyUsage_() {
@@ -1567,7 +1673,8 @@ function modifyUsage_() {
     '・刪除 → 最近一次記的帳',
     '・刪除 午餐 → 最近一筆「午餐」',
     '・刪除 昨天 停車 60 → 指定日期、品項、金額',
-    '・刪除重複 → 重複記到的帳只留一筆'
+    '・刪除重複 → 重複記到的帳只留一筆',
+    '・恢復 → 復原上一次的刪除或修改'
   ].join('\n');
 }
 
@@ -2049,7 +2156,7 @@ function helpText_() {
     '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
     '✏️ 修改：修改 150、修改 交通、午餐改成150',
-    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除重複',
+    '🗑️ 刪除：刪除（最近一筆）、刪除 午餐、刪除重複、恢復（復原上一次）',
     '',
     '🔔 訂閱／固定支出：固定支出、固定支出 Netflix 390 每月15號',
     '🏷️ 分類關鍵字：關鍵字 健身房 其他、關鍵字（看清單）',
