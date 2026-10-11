@@ -1655,7 +1655,7 @@ function formatPlan_(today) {
  *   預算 餐飲 刪除       → 刪除分類預算；「預算 刪除」清除全部
  *   預算建議／631        → 依收入用 631 法則建議，並列出上月各分類花費當參考
  *
- * 預算存在指令碼屬性 BUDGETS（JSON），全家共用。支出含固定支出、不含收入。
+ * 預算存在指令碼屬性 BUDGETS（JSON），全家共用。只算日常花費：不含固定支出（房租、保險等），也不含收入。
  */
 
 var BUDGET_PROP = 'BUDGETS';
@@ -1746,14 +1746,24 @@ function applyBudgetCommand_(cmd, today) {
   return formatBudgetStatus_(today);
 }
 
-/** 本月 1 號到今天的支出：總額、各分類、固定支出。 */
-function monthSpending_(today) {
-  var s = summarize_(today.slice(0, 8) + '01', today, '全部', '');
-  var fixed = 0;
+/** 期間內的日常花費（不含固定支出）：總額、各分類，另外回傳固定支出金額。 */
+function dailySpending_(start, end) {
+  var s = summarize_(start, end, '全部', '');
+  var result = { total: 0, byCategory: {}, fixed: 0 };
   s.rows.forEach(function (r) {
-    if (r[COL.source] === '固定支出') fixed += Number(r[COL.amount]) || 0;
+    var amount = Number(r[COL.amount]) || 0;
+    if (r[COL.source] === FIXED_SOURCE) {
+      result.fixed += amount;
+      return;
+    }
+    result.total += amount;
+    result.byCategory[r[COL.category]] = (result.byCategory[r[COL.category]] || 0) + amount;
   });
-  return { total: s.total, byCategory: s.byCategory, fixed: fixed };
+  return result;
+}
+
+function monthSpending_(today) {
+  return dailySpending_(today.slice(0, 8) + '01', today);
 }
 
 function budgetBar_(ratio) {
@@ -1785,7 +1795,7 @@ function formatBudgetStatus_(today) {
   if (b.total) {
     lines.push('', '總預算 $' + formatMoney_(b.total) + '  ' + budgetBar_(spend.total / b.total));
     lines.push(budgetLine_(b.total, spend.total, daysLeft));
-    if (spend.fixed > 0) lines.push('（含固定支出 $' + formatMoney_(spend.fixed) + '）');
+    if (spend.fixed > 0) lines.push('（固定支出 $' + formatMoney_(spend.fixed) + ' 另計，不算在預算內）');
   }
   if (cats.length) {
     lines.push('', '分類預算：');
@@ -1833,16 +1843,19 @@ function budgetAlerts_(entries, today) {
   return alerts.join('\n');
 }
 
-/** 每月收入：固定收入換算成每月；沒有固定收入就用上個月記到的收入。 */
+/** 每月收入：固定收入換算成每月；沒有固定收入就用上個月記到的收入。另外回傳每月固定支出。 */
 function monthlyIncome_(today) {
   var income = 0;
+  var fixed = 0;
   listRecurringItems_().forEach(function (i) {
-    if (i.category === INCOME_CATEGORY && i.amount > 0) income += i.amount / Math.max(1, i.every);
+    if (!(i.amount > 0)) return;
+    if (i.category === INCOME_CATEGORY) income += i.amount / Math.max(1, i.every);
+    else fixed += i.amount / Math.max(1, i.every);
   });
-  if (income > 0) return { amount: income, from: '固定收入' };
+  if (income > 0) return { amount: income, from: '固定收入', fixed: fixed };
   var last = lastMonthRange_(today);
   var s = summarize_(last.start, last.end, INCOME_CATEGORY, '');
-  return { amount: s.total, from: '上月收入' };
+  return { amount: s.total, from: '上月收入', fixed: fixed };
 }
 
 function lastMonthRange_(today) {
@@ -1862,16 +1875,24 @@ function formatBudgetSuggestion_(today) {
   if (income.amount > 0) {
     var a = Math.round(income.amount);
     lines.push('', '每月收入 $' + formatMoney_(a) + '（' + income.from + '）');
-    lines.push('・60% 日常支出 $' + formatMoney_(a * 0.6) + ' → 傳「預算 ' + Math.round(a * 0.6) + '」');
+    lines.push('・60% 生活支出 $' + formatMoney_(a * 0.6));
+    var daily = Math.round(a * 0.6 - income.fixed);
+    if (income.fixed > 0) {
+      lines.push('  扣掉每月固定支出 $' + formatMoney_(income.fixed) + (daily > 0
+        ? '，日常花費預算 $' + formatMoney_(daily) + ' → 傳「預算 ' + daily + '」'
+        : '，已經超過 60%，建議檢視固定支出'));
+    } else {
+      lines.push('  → 傳「預算 ' + daily + '」');
+    }
     lines.push('・30% 儲蓄投資 $' + formatMoney_(a * 0.3));
     lines.push('・10% 保險防護 $' + formatMoney_(a * 0.1));
   } else {
     lines.push('', '還沒有收入紀錄，先設定「固定收入 薪水 85000 每月5號」或記「收入 薪水 85000」。');
   }
   var last = lastMonthRange_(today);
-  var s = summarize_(last.start, last.end, '全部', '');
+  var s = dailySpending_(last.start, last.end);
   if (s.total > 0) {
-    lines.push('', '📊 ' + last.month + ' 月實際花費（可當分類預算的參考）');
+    lines.push('', '📊 ' + last.month + ' 月日常花費（不含固定支出，可當分類預算的參考）');
     CATEGORIES.forEach(function (c) {
       if (s.byCategory[c]) {
         lines.push('・' + c + ' $' + formatMoney_(s.byCategory[c]) + '（' + Math.round(s.byCategory[c] / s.total * 100) + '%）');

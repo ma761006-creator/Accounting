@@ -1301,22 +1301,28 @@ test('預算：設定、使用狀況、記帳後提醒與 631 建議', () => {
   assert.match(env.replies[5], /🚨 本月餐飲已超支 \$500/);
   assert.match(env.replies[5], /⚠️ 本月預算只剩 \$1,500（已用 85%）/);
 
+  // 固定支出不算在預算內
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  env.context.appendEntries_([{ date: today, category: '其他', item: '房租', amount: 20000, note: '' }],
+    { recorder: '🏠 全家', userId: '', messageId: '', source: '固定支出' });
   env.post({ type: 'text', id: 's', text: '預算' });
   const status = env.replies[6];
+  assert.match(status, /固定支出 \$20,000 另計，不算在預算內/);
   assert.match(status, /總預算 \$10,000[\s\S]*已花 \$8,500（85%）｜剩 \$1,500/);
   assert.match(status, /・餐飲 \$8,000｜已花 \$8,500（106%）｜🚨 超支 \$500/);
   assert.match(status, /・交通 \$1,000｜已花 \$0（0%）｜剩 \$1,000/);
 
   env.post({ type: 'text', id: 'f', text: '固定收入 薪水 80000 每月5號' });
+  env.post({ type: 'text', id: 'f2', text: '固定支出 房租 20000 每月1號' });
   env.post({ type: 'text', id: 'g', text: '預算建議' });
-  assert.match(env.replies[8], /每月收入 \$80,000（固定收入）[\s\S]*60% 日常支出 \$48,000 → 傳「預算 48000」/);
+  assert.match(env.replies[9], /每月收入 \$80,000（固定收入）[\s\S]*60% 生活支出 \$48,000\n  扣掉每月固定支出 \$20,000，日常花費預算 \$28,000 → 傳「預算 28000」/);
 
   env.post({ type: 'text', id: 'c', text: '預算 餐飲 刪除' });
-  assert.ok(!/・餐飲/.test(env.replies[9]));
+  assert.ok(!/・餐飲/.test(env.replies[10]));
   env.post({ type: 'text', id: 'd', text: '預算 刪除' });
   assert.strictEqual(env.props.BUDGETS, undefined);
   env.post({ type: 'text', id: 'r3', text: '早餐 80' });
-  assert.ok(!/預算|超支/.test(env.replies[11]), env.replies[11]);
+  assert.ok(!/預算|超支/.test(env.replies[12]), env.replies[12]);
   assert.strictEqual(env.claudeRequests.length, 0);
 });
 
