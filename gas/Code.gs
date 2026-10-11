@@ -16,6 +16,7 @@ function helpText_() {
     '',
     '🔎 查詢：本月、上月、本週、今天',
     '・本月 餐飲、全聯花多少、本月 明細',
+    '・某個月：9月、9月 明細、9月收入；每個月一覽：每月',
     '📊 分析：分析、本週分析、上月分析',
     '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
@@ -47,6 +48,7 @@ function mainMenu_() {
     { label: '🔁 固定支出', text: '固定支出' },
     { label: '⏰ 扣款提醒', text: '近期扣款' },
     { label: '💰 本月收入', text: '本月收入' },
+    { label: '📅 每月收支', text: '每月' },
     { label: '📋 年度計畫', text: '年度計畫' },
     { label: '📌 本月預算', text: '預算' },
     { label: '💰 怎麼記帳', text: '記帳' },
@@ -61,6 +63,7 @@ function queryMenu_() {
     { label: '本月', text: '本月' },
     { label: '上月', text: '上月' },
     { label: '📋 本月明細', text: '本月 明細' },
+    { label: '📅 每月收支', text: '每月' },
     { label: '📊 分析', text: '分析' }
   ];
 }
@@ -180,6 +183,10 @@ function handleEvent_(event) {
     var recurringName = matchRecurringQuestion_(text);
     if (recurringName !== null) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
+      return;
+    }
+    if (parseMonthlyCommand_(text)) {
+      replyText_(event.replyToken, formatMonthly_(today0), queryMenu_());
       return;
     }
     var planCmd = parsePlanCommand_(text);

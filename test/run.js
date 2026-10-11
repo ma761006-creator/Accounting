@@ -1391,6 +1391,36 @@ test('AI 把「9月薪水」記成今天時，改成 9 月', () => {
   assert.strictEqual(env.context.Utilities.formatDate(row[1], 'Asia/Taipei', 'yyyy-MM-dd'), env.context.monthDate_(9, today, today));
 });
 
+test('查某個月與每月收支一覽', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  const y = today.slice(0, 4);
+  const q = (t) => env.context.parseQuery_(t, today);
+  assert.deepStrictEqual([q('9月').start_date, q('9月').end_date], [y + '-09-30' <= today ? y + '-09-01' : (y - 1) + '-09-01', y + '-09-30' <= today ? y + '-09-30' : (y - 1) + '-09-30']);
+  assert.strictEqual(q('9月收入').category, '收入');
+  assert.strictEqual(q('9月 明細').detail, true);
+  assert.strictEqual(q('2025年3月').start_date, '2025-03-01');
+  assert.strictEqual(q('9月 電費 1200'), null);
+  assert.ok(env.context.isFixedCommand_('9月收入'));
+
+  const m1 = env.context.ymd_(+y, 1, 15);
+  const m2 = env.context.ymd_(+y, 2, 15);
+  env.context.appendEntries_([
+    { date: m1, category: '餐飲', item: '午餐', amount: 300, note: '' },
+    { date: m1, category: '收入', item: '薪水', amount: 50000, note: '' },
+    { date: m2, category: '其他', item: '房租', amount: 20000, note: '' }
+  ], { recorder: '爸爸', userId: 'Udad', messageId: '1', source: '文字' });
+  env.post({ type: 'text', id: 'a', text: '1月' });
+  assert.match(env.replies[0], new RegExp('📊 ' + y + '-01-01 ～ ' + y + '-01-31[\\s\\S]*總計 \\$300[\\s\\S]*收入 \\$50,000'));
+  env.post({ type: 'text', id: 'b', text: '每月收支' });
+  const r = env.replies[1];
+  assert.match(r, /1 月\n・支出 \$300\n・收入 \$50,000｜結餘 \$49,700/);
+  assert.match(r, /2 月\n・支出 \$20,000/);
+  assert.match(r, /今年合計：支出 \$20,300｜收入 \$50,000｜結餘 \$29,700/);
+  assert.strictEqual(env.claudeRequests.length, 0);
+});
+
 let failed = 0;
 for (const t of tests) {
   try {

@@ -485,6 +485,22 @@ function matchDatePrefix_(s, today) {
   return null;
 }
 
+/** 查詢的月份：「9月」「9月份」「2026年9月」→ 那個月 1 號到月底（本月到今天；比今天晚就當作去年）。 */
+function matchMonthRange_(s, today) {
+  var m = s.match(/^(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月份?(?![\d號日])/);
+  if (!m || +m[2] < 1 || +m[2] > 12) return null;
+  var month = +m[2];
+  var y = m[1] ? +m[1] : +today.slice(0, 4);
+  var start = ymd_(y, month, 1);
+  if (!m[1] && start > today) {
+    y -= 1;
+    start = ymd_(y, month, 1);
+  }
+  var end = ymd_(y, month, daysInMonth_(y, month));
+  if (end > today) end = today;
+  return { range: [start, end], length: m[0].length };
+}
+
 /** 開頭只有月份：「9月薪水」「3月份電費」→ 那個月的同一天（比今天晚就當作去年）。 */
 function matchMonthPrefix_(s, today) {
   var m = s.match(/^(\d{1,2})月份?(?![\d號日])\s*/);
@@ -567,7 +583,12 @@ function parseQuery_(t, today) {
 
   var range = null;
   var keyword = '';
-  if (tokens.length && periods.hasOwnProperty(tokens[0])) {
+  var monthHit = tokens.length ? matchMonthRange_(tokens.join(' '), today) : null;
+  if (monthHit && (monthHit.length === tokens[0].length || explicit)) {
+    // 「9月」「9月 餐飲」「2026年9月 明細」「9月全聯花多少」
+    range = monthHit.range;
+    keyword = tokens.join(' ').slice(monthHit.length).trim();
+  } else if (tokens.length && periods.hasOwnProperty(tokens[0])) {
     // 「本月」「本月 全聯」
     range = periods[tokens[0]];
     keyword = tokens.slice(1).join(' ');
@@ -1489,6 +1510,52 @@ function insight_(top, share, categoryCount) {
  * 規則模式的分析指令：「分析」「本月分析」「上月分析」「幫我分析這個月的消費」「本週分析」。
  * 不是分析指令則回傳 null。
  */
+/** 「每月」「每月收支」「各月」「月報」→ 今年每個月的支出、收入、結餘。 */
+function parseMonthlyCommand_(text) {
+  var t = normalizeText_(text).replace(/\s+/g, '');
+  return /^(今年)?(每月|每個月|各月|逐月|歷月|月報|月份)(收支|花費|支出|統計|總覽|比較|報表)?$/.test(t);
+}
+
+function formatMonthly_(today) {
+  var y = +today.slice(0, 4);
+  var thisMonth = +today.slice(5, 7);
+  var months = {};
+  readRows_().forEach(function (r) {
+    var d = String(r[COL.date]);
+    if (+d.slice(0, 4) !== y) return;
+    var m = +d.slice(5, 7);
+    var b = months[m] || (months[m] = { expense: 0, fixed: 0, income: 0 });
+    var amount = Number(r[COL.amount]) || 0;
+    if (r[COL.category] === INCOME_CATEGORY) b.income += amount;
+    else {
+      b.expense += amount;
+      if (r[COL.source] === FIXED_SOURCE) b.fixed += amount;
+    }
+  });
+  var lines = ['📅 ' + y + ' 每月收支'];
+  var total = { expense: 0, income: 0 };
+  var any = false;
+  for (var m = 1; m <= thisMonth; m++) {
+    var b = months[m];
+    if (!b) continue;
+    any = true;
+    total.expense += b.expense;
+    total.income += b.income;
+    var net = b.income - b.expense;
+    lines.push('', m + ' 月' + (m === thisMonth ? '（到今天）' : ''));
+    lines.push('・支出 $' + formatMoney_(b.expense) + (b.fixed > 0 ? '（固定 $' + formatMoney_(b.fixed) + '）' : ''));
+    if (b.income > 0) {
+      lines.push('・收入 $' + formatMoney_(b.income) + '｜' + (net >= 0 ? '結餘 $' + formatMoney_(net) : '⚠️ 赤字 $' + formatMoney_(-net)));
+    }
+  }
+  if (!any) return '今年還沒有記帳紀錄。';
+  var totalNet = total.income - total.expense;
+  lines.push('', '今年合計：支出 $' + formatMoney_(total.expense) + '｜收入 $' + formatMoney_(total.income) + '｜' +
+    (totalNet >= 0 ? '結餘 $' + formatMoney_(totalNet) : '赤字 $' + formatMoney_(-totalNet)));
+  lines.push('', '看某個月：「9月」「9月 明細」「9月收入」「9月分析」');
+  return lines.join('\n');
+}
+
 function parseAnalysis_(text, today) {
   var t = normalizeText_(text);
   if (!/分析/.test(t)) return null;
@@ -2392,7 +2459,7 @@ function parseMessage_(input, today) {
 
 function isFixedCommand_(text) {
   var t = normalizeText_(text).replace(/\s+/g, ' ');
-  var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年)';
+  var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年|(\\d{4}年)?\\d{1,2}月份?)';
   return new RegExp('^' + period + '( ?(明細|收入))?( ?明細)?$').test(t) ||
     new RegExp('^' + period + '? ?分析$').test(t);
 }
@@ -2820,6 +2887,7 @@ function helpText_() {
     '',
     '🔎 查詢：本月、上月、本週、今天',
     '・本月 餐飲、全聯花多少、本月 明細',
+    '・某個月：9月、9月 明細、9月收入；每個月一覽：每月',
     '📊 分析：分析、本週分析、上月分析',
     '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
@@ -2851,6 +2919,7 @@ function mainMenu_() {
     { label: '🔁 固定支出', text: '固定支出' },
     { label: '⏰ 扣款提醒', text: '近期扣款' },
     { label: '💰 本月收入', text: '本月收入' },
+    { label: '📅 每月收支', text: '每月' },
     { label: '📋 年度計畫', text: '年度計畫' },
     { label: '📌 本月預算', text: '預算' },
     { label: '💰 怎麼記帳', text: '記帳' },
@@ -2865,6 +2934,7 @@ function queryMenu_() {
     { label: '本月', text: '本月' },
     { label: '上月', text: '上月' },
     { label: '📋 本月明細', text: '本月 明細' },
+    { label: '📅 每月收支', text: '每月' },
     { label: '📊 分析', text: '分析' }
   ];
 }
@@ -2984,6 +3054,10 @@ function handleEvent_(event) {
     var recurringName = matchRecurringQuestion_(text);
     if (recurringName !== null) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
+      return;
+    }
+    if (parseMonthlyCommand_(text)) {
+      replyText_(event.replyToken, formatMonthly_(today0), queryMenu_());
       return;
     }
     var planCmd = parsePlanCommand_(text);

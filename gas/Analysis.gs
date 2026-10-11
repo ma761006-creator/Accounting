@@ -200,6 +200,52 @@ function insight_(top, share, categoryCount) {
  * 規則模式的分析指令：「分析」「本月分析」「上月分析」「幫我分析這個月的消費」「本週分析」。
  * 不是分析指令則回傳 null。
  */
+/** 「每月」「每月收支」「各月」「月報」→ 今年每個月的支出、收入、結餘。 */
+function parseMonthlyCommand_(text) {
+  var t = normalizeText_(text).replace(/\s+/g, '');
+  return /^(今年)?(每月|每個月|各月|逐月|歷月|月報|月份)(收支|花費|支出|統計|總覽|比較|報表)?$/.test(t);
+}
+
+function formatMonthly_(today) {
+  var y = +today.slice(0, 4);
+  var thisMonth = +today.slice(5, 7);
+  var months = {};
+  readRows_().forEach(function (r) {
+    var d = String(r[COL.date]);
+    if (+d.slice(0, 4) !== y) return;
+    var m = +d.slice(5, 7);
+    var b = months[m] || (months[m] = { expense: 0, fixed: 0, income: 0 });
+    var amount = Number(r[COL.amount]) || 0;
+    if (r[COL.category] === INCOME_CATEGORY) b.income += amount;
+    else {
+      b.expense += amount;
+      if (r[COL.source] === FIXED_SOURCE) b.fixed += amount;
+    }
+  });
+  var lines = ['📅 ' + y + ' 每月收支'];
+  var total = { expense: 0, income: 0 };
+  var any = false;
+  for (var m = 1; m <= thisMonth; m++) {
+    var b = months[m];
+    if (!b) continue;
+    any = true;
+    total.expense += b.expense;
+    total.income += b.income;
+    var net = b.income - b.expense;
+    lines.push('', m + ' 月' + (m === thisMonth ? '（到今天）' : ''));
+    lines.push('・支出 $' + formatMoney_(b.expense) + (b.fixed > 0 ? '（固定 $' + formatMoney_(b.fixed) + '）' : ''));
+    if (b.income > 0) {
+      lines.push('・收入 $' + formatMoney_(b.income) + '｜' + (net >= 0 ? '結餘 $' + formatMoney_(net) : '⚠️ 赤字 $' + formatMoney_(-net)));
+    }
+  }
+  if (!any) return '今年還沒有記帳紀錄。';
+  var totalNet = total.income - total.expense;
+  lines.push('', '今年合計：支出 $' + formatMoney_(total.expense) + '｜收入 $' + formatMoney_(total.income) + '｜' +
+    (totalNet >= 0 ? '結餘 $' + formatMoney_(totalNet) : '赤字 $' + formatMoney_(-totalNet)));
+  lines.push('', '看某個月：「9月」「9月 明細」「9月收入」「9月分析」');
+  return lines.join('\n');
+}
+
 function parseAnalysis_(text, today) {
   var t = normalizeText_(text);
   if (!/分析/.test(t)) return null;
