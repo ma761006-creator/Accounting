@@ -163,7 +163,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Plan.gs', 'Budget.gs', 'Modify.gs']
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Plan.gs', 'Budget.gs', 'Shopping.gs', 'Modify.gs']
     .map((f) => path.join(dir, f));
   files.forEach((f) => {
     vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
@@ -1497,6 +1497,64 @@ test('剛新增固定支出就傳「刪除」：刪的是那筆固定支出，�
   env.post({ type: 'text', id: '7', text: '刪除' });
   assert.match(env.replies[6], /已刪除：\n・.*午餐/);
   assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => r[0] === '瓦斯').length, 1);
+});
+
+test('購物清單：加入、查看、記帳自動劃掉', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const p = (t) => env.context.parseShoppingCommand_(t);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p('要買 衛生紙、牛奶'))), { action: 'add', items: ['衛生紙', '牛奶'] });
+  assert.strictEqual(p('要買衛生紙 560'), null);
+  assert.strictEqual(p('要買票嗎？'), null);
+  assert.strictEqual(p('取消聚餐'), null);
+  assert.strictEqual(p('購物清單').action, 'list');
+
+  env.post({ type: 'text', id: '1', text: '要買 衛生紙、牛奶、電池' });
+  assert.match(env.replies[0], /已加入：衛生紙、牛奶、電池[\s\S]*購物清單（3 項）/);
+  env.post({ type: 'text', id: '2', text: '要買 牛奶' });
+  assert.match(env.replies[1], /已經在清單上/);
+  env.post({ type: 'text', id: '3', text: '買好了 電池' });
+  assert.match(env.replies[2], /已劃掉：電池[\s\S]*購物清單（2 項）/);
+  env.post({ type: 'text', id: '4', text: '全聯衛生紙 560' });
+  assert.match(env.replies[3], /已記帳[\s\S]*🛒 已從購物清單劃掉：衛生紙/);
+  env.post({ type: 'text', id: '5', text: '購物清單' });
+  assert.match(env.replies[4], /購物清單（1 項）\n・牛奶/);
+  env.post({ type: 'text', id: '6', text: '購物清單 清空' });
+  env.post({ type: 'text', id: '7', text: '要買什麼' });
+  assert.match(env.replies[6], /購物清單是空的/);
+  assert.strictEqual(env.claudeRequests.length, 0);
+});
+
+test('購物計畫：想買的東西要存多久', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  const p = (t) => env.context.parseWishCommand_(t);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p('想買 iPhone 36000 3月前'))), { action: 'add', name: 'iPhone', price: 36000, deadline: '3月前' });
+  assert.strictEqual(p('想買 冷氣 4.5萬').price, 45000);
+  assert.strictEqual(p('想買 刪除 iPhone').action, 'delete');
+  assert.strictEqual(env.context.wishDeadline_('6個月內', '2026-10-11'), '2027-03');
+  assert.strictEqual(env.context.wishDeadline_('3月前', '2026-10-11'), '2027-03');
+  assert.strictEqual(env.context.monthsUntil_('2026-10-11', '2027-03'), 6);
+
+  // 上個月：收入 50000、支出 20000 → 每月結餘 30000
+  const y = +today.slice(0, 4), m = +today.slice(5, 7);
+  const lm = m === 1 ? env.context.ymd_(y - 1, 12, 5) : env.context.ymd_(y, m - 1, 5);
+  env.context.appendEntries_([
+    { date: lm, category: '收入', item: '薪水', amount: 50000, note: '' },
+    { date: lm, category: '其他', item: '房租', amount: 20000, note: '' }
+  ], { recorder: '爸爸', userId: 'Udad', messageId: 'x', source: '文字' });
+
+  env.post({ type: 'text', id: '1', text: '想買 冷氣 4.5萬' });
+  assert.match(env.replies[0], /已加入購物計畫：冷氣 \$45,000[\s\S]*冷氣 \$45,000｜照目前結餘約 2 個月可以買/);
+  assert.match(env.replies[0], /最近 3 個月平均每月結餘 \$30,000/);
+  env.post({ type: 'text', id: '2', text: '想買 iPhone 36000 6個月內' });
+  assert.match(env.replies[1], /iPhone \$36,000｜\d{4}\/\d{2} 前，還有 6 個月，每月要存 \$6,000/);
+  assert.match(env.replies[1], /✅ 有期限的項目每月要存 \$6,000，目前的結餘夠/);
+  env.post({ type: 'text', id: '3', text: '購物規劃' });
+  assert.match(env.replies[2], /🛒 購物清單是空的[\s\S]*🎯 購物計畫/);
+  env.post({ type: 'text', id: '4', text: '想買 刪除 iPhone' });
+  assert.ok(!/iPhone \$/.test(env.replies[3]));
 });
 
 let failed = 0;
