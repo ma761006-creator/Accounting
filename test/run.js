@@ -72,7 +72,8 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
     PropertiesService: {
       getScriptProperties: () => ({
         getProperty: (k) => props[k] || null,
-        setProperty: (k, v) => { props[k] = v; }
+        setProperty: (k, v) => { props[k] = v; },
+        deleteProperty: (k) => { delete props[k]; }
       })
     },
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, openById: () => ss },
@@ -162,7 +163,7 @@ function createEnv(claudeReplies, extraProps, sourceFiles) {
 
   const dir = path.join(__dirname, '..', 'gas');
   // 依 README 教學的建立順序載入（Code.gs 最先），確認全域變數不會依賴尚未載入的檔案
-  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Plan.gs', 'Modify.gs']
+  const files = sourceFiles || ['Code.gs', 'Config.gs', 'Claude.gs', 'Line.gs', 'Sheet.gs', 'Parser.gs', 'Gemini.gs', 'Rules.gs', 'Recurring.gs', 'Analysis.gs', 'Plan.gs', 'Budget.gs', 'Modify.gs']
     .map((f) => path.join(dir, f));
   files.forEach((f) => {
     vm.runInContext(fs.readFileSync(f, 'utf8'), context, { filename: path.basename(f) });
@@ -1271,6 +1272,52 @@ test('沒說用途時記成「未說明」並提醒補上；「你是誰」會�
   assert.match(env.replies[2], /我是家庭記帳機器人/);
   env.post({ type: 'text', id: '4', text: '你會什麼' });
   assert.match(env.replies[3], /點下面的按鈕/);
+});
+
+test('預算：設定、使用狀況、記帳後提醒與 631 建議', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const p = (t) => env.context.parseBudgetCommand_(t);
+  assert.strictEqual(p('預算').action, 'status');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p('預算 3萬'))), { action: 'set', category: '', amount: 30000 });
+  assert.strictEqual(p('餐飲預算 8000').category, '餐飲');
+  assert.strictEqual(p('預算 交通 10%').percent, 10);
+  assert.strictEqual(p('預算 餐飲 刪除').action, 'clear');
+  assert.strictEqual(p('631').action, 'suggest');
+  assert.strictEqual(p('午餐 120'), null);
+
+  env.post({ type: 'text', id: 'b0', text: '預算 交通 10%' });
+  assert.match(env.replies[0], /要先設定總預算/);
+  env.post({ type: 'text', id: 'b1', text: '預算 10000' });
+  assert.match(env.replies[1], /已設定每月總預算 \$10,000[\s\S]*總預算 \$10,000/);
+  env.post({ type: 'text', id: 'b2', text: '預算 餐飲 8000' });
+  env.post({ type: 'text', id: 'b3', text: '預算 交通 10%' });
+  assert.match(env.replies[3], /交通每月預算 \$1,000（總預算的 10%）/);
+
+  env.post({ type: 'text', id: 'r1', text: '午餐 6500' });
+  assert.match(env.replies[4], /⚠️ 本月餐飲預算只剩 \$1,500（已用 81%）/);
+  assert.ok(!/本月預算只剩/.test(env.replies[4]), env.replies[4]);
+  env.post({ type: 'text', id: 'r2', text: '晚餐 2000' });
+  assert.match(env.replies[5], /🚨 本月餐飲已超支 \$500/);
+  assert.match(env.replies[5], /⚠️ 本月預算只剩 \$1,500（已用 85%）/);
+
+  env.post({ type: 'text', id: 's', text: '預算' });
+  const status = env.replies[6];
+  assert.match(status, /總預算 \$10,000[\s\S]*已花 \$8,500（85%）｜剩 \$1,500/);
+  assert.match(status, /・餐飲 \$8,000｜已花 \$8,500（106%）｜🚨 超支 \$500/);
+  assert.match(status, /・交通 \$1,000｜已花 \$0（0%）｜剩 \$1,000/);
+
+  env.post({ type: 'text', id: 'f', text: '固定收入 薪水 80000 每月5號' });
+  env.post({ type: 'text', id: 'g', text: '預算建議' });
+  assert.match(env.replies[8], /每月收入 \$80,000（固定收入）[\s\S]*60% 日常支出 \$48,000 → 傳「預算 48000」/);
+
+  env.post({ type: 'text', id: 'c', text: '預算 餐飲 刪除' });
+  assert.ok(!/・餐飲/.test(env.replies[9]));
+  env.post({ type: 'text', id: 'd', text: '預算 刪除' });
+  assert.strictEqual(env.props.BUDGETS, undefined);
+  env.post({ type: 'text', id: 'r3', text: '早餐 80' });
+  assert.ok(!/預算|超支/.test(env.replies[11]), env.replies[11]);
+  assert.strictEqual(env.claudeRequests.length, 0);
 });
 
 let failed = 0;
