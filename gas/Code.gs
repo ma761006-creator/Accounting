@@ -30,6 +30,8 @@ function helpText_() {
     '💰 收入：收入 醫院 85000、本月收入、固定收入 薪水 85000 每月5號',
     '📋 年度計畫：年度計畫、存錢目標 100萬',
     '📌 預算：預算、預算 30000、預算 餐飲 8000、預算建議',
+    '🛒 購物清單：要買 衛生紙、牛奶；購物清單；買好了 衛生紙',
+    '🎯 購物計畫：想買 iPhone 36000 3月前；購物計畫',
     '',
     '分類：' + CATEGORIES.join('、'),
     '',
@@ -49,10 +51,19 @@ function mainMenu_() {
     { label: '⏰ 扣款提醒', text: '近期扣款' },
     { label: '💰 本月收入', text: '本月收入' },
     { label: '📅 每月收支', text: '每月' },
+    { label: '🛒 購物規劃', text: '購物規劃' },
     { label: '📋 年度計畫', text: '年度計畫' },
     { label: '📌 本月預算', text: '預算' },
     { label: '💰 怎麼記帳', text: '記帳' },
     { label: '✏️ 修改刪除', text: '修改' }
+  ];
+}
+
+function shoppingMenu_() {
+  return [
+    { label: '🛒 購物清單', text: '購物清單' },
+    { label: '🎯 購物計畫', text: '購物計畫' },
+    { label: '📌 本月預算', text: '預算' }
   ];
 }
 
@@ -194,6 +205,26 @@ function handleEvent_(event) {
       replyText_(event.replyToken, applyPlanCommand_(planCmd, today0), mainMenu_());
       return;
     }
+    if (/^(購物規劃|購物規畫|購物)$/.test(text)) {
+      replyText_(event.replyToken, formatShoppingPlan_(today0), shoppingMenu_());
+      return;
+    }
+    var shoppingCmd = parseShoppingCommand_(text);
+    if (shoppingCmd) {
+      var shopper = getDisplayName_(event.source);
+      replyText_(event.replyToken, withLock_(function () {
+        return applyShoppingCommand_(shoppingCmd, shopper);
+      }), shoppingMenu_());
+      return;
+    }
+    var wishCmd = parseWishCommand_(text);
+    if (wishCmd) {
+      var wisher = getDisplayName_(event.source);
+      replyText_(event.replyToken, withLock_(function () {
+        return applyWishCommand_(wishCmd, today0, wisher);
+      }), shoppingMenu_());
+      return;
+    }
     var budgetCmd = parseBudgetCommand_(text);
     if (budgetCmd) {
       replyText_(event.replyToken, withLock_(function () {
@@ -286,6 +317,14 @@ function handleEvent_(event) {
     // 之後的「刪除」要刪這次記的帳，不是先前新增的固定支出
     takeLastRecurring_(event.source.userId);
     var recordedText = formatRecorded_(parsed.entries, recorder, parsed.statedTotal);
+    try {
+      var crossed = withLock_(function () {
+        return shoppingAfterRecord_(parsed.entries);
+      });
+      if (crossed) recordedText += '\n\n' + crossed;
+    } catch (err) {
+      console.warn('購物清單更新失敗：' + (err.message || err));
+    }
     try {
       var alerts = budgetAlerts_(parsed.entries, today);
       if (alerts) recordedText += '\n\n' + alerts;
