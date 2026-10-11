@@ -168,7 +168,7 @@ function handleEvent_(event) {
       return;
     }
     var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-    var recurringCmd = parseRecurringCommand_(text);
+    var recurringCmd = parseRecurringCommand_(text) || parseRecurringEditByName_(text);
     if (recurringCmd) {
       var setter = getDisplayName_(event.source);
       replyText_(event.replyToken, withLock_(function () {
