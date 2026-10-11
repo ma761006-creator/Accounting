@@ -125,7 +125,12 @@ function parseDateValue_(s, today) {
 function parseTarget_(s, today) {
   var target = { keyword: '', date: '', month: '', amount: null };
   s = s.replace(/^(剛剛|剛才|最近一筆|上一筆|那筆|的)\s*/, '').replace(/(那筆|的)$/, '').trim();
+  // 從明細複製的「09-11 薪水 $89,000（李宗諭）」：去掉記錄人、$ 與千分位
+  s = s.replace(/\s*[（(][^（）()]*[）)]$/, '').replace(/\$\s*/g, '').replace(/(\d),(?=\d{3}(?!\d))/g, '$1').trim();
   if (!s) return target;
+  // 明細的日期格式「09-11」（兩位數補零，避免把「7-11」這種店名當成日期）
+  var md = s.match(/^(\d{2})-(\d{2})(?=\s)/);
+  if (md && +md[1] >= 1 && +md[1] <= 12) s = +md[1] + '/' + +md[2] + s.slice(md[0].length);
   var d = matchDatePrefix_(s, today);
   if (d) {
     target.date = d.date;

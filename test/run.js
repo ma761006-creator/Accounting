@@ -1371,6 +1371,13 @@ test('「9月薪水」記到 9 月，記錯月份可以改日期', () => {
   assert.match(env.replies[7], /改成：\d{4}-08-\d{2} 收入 獎金 \$6,000/);
   assert.strictEqual(p('我改搭計程車 300'), null);
 
+  // 從明細整行複製來刪除
+  const pt = env.context.parseTarget_('09-11 薪水 $89,000（李宗諭）', today);
+  assert.strictEqual(pt.keyword, '薪水');
+  assert.strictEqual(pt.amount, 89000);
+  assert.match(pt.date, /-09-11$/);
+  assert.strictEqual(env.context.parseTarget_('7-11 咖啡', today).keyword, '7-11 咖啡');
+
   // 從說明整段複製貼上（編號＋說明、兩行一起）也看得懂
   env.post({ type: 'text', id: '9', text: '收入 紅利 3000' });
   env.post({ type: 'text', id: '10', text: '1.\t修改 紅利 3000 月份 7月：把記成 10 月的那筆改到 7 月。\n\t2.\t7月紅利改3500元：再把金額改成 3,500 元。' });
