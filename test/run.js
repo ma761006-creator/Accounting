@@ -1441,6 +1441,24 @@ test('沒寫「固定支出」也能改固定項目的扣款日', () => {
   assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => r[0] === 'iCloud+').length, 1);
 });
 
+test('固定支出：「兩個月一次 10/2扣款」', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const p = (t) => env.context.parseRecurringCommand_(t);
+  const c = p('固定支出 大春煉皂 400元 兩個月一次 10/2扣款');
+  assert.deepStrictEqual([c.name, c.amount, c.every, c.day, c.anchorMonth], ['大春煉皂', 400, 2, 2, 10]);
+  assert.strictEqual(p('固定支出 保險 36000 每年3/15').month, 3);
+  assert.strictEqual(p('固定支出 網路費 半年一次 1200').every, 6);
+  const n = env.context.nextFromAnchor_;
+  assert.strictEqual(n('2026-10-11', 10, 2, 2), '2026-12-02');
+  assert.strictEqual(n('2026-10-01', 10, 2, 2), '2026-10-02');
+  assert.strictEqual(n('2026-10-11', 12, 20, 2), '2026-10-20');
+  assert.strictEqual(n('2026-02-11', 12, 2, 2), '2026-04-02');
+  assert.strictEqual(env.context.addMonths_('2026-01-15', -2, 15), '2025-11-15');
+  env.post({ type: 'text', id: '1', text: '固定支出 大春煉皂 400元 兩個月一次 10/2扣款' });
+  assert.match(env.replies[0], /大春煉皂（爸爸）｜\$400｜每 2 個月 2 號/);
+});
+
 let failed = 0;
 for (const t of tests) {
   try {
