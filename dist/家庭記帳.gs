@@ -934,8 +934,7 @@ function cycleText_(item) {
 function nextFromAnchor_(today, month, day, every) {
   var y = +today.slice(0, 4);
   var next = ymd_(y, month, Math.min(day, daysInMonth_(y, month)));
-  // 比今天晚太多（例如 12/2 當作今年，但其實是去年 12/2 開始）就往前推回去
-  while (addMonths_(next, -every, day) >= today) next = addMonths_(next, -every, day);
+  // 說的日期還沒到，就是下次扣款日；已經過了就往後推週期
   while (next < today) next = addMonths_(next, every, day);
   return next;
 }
@@ -1020,6 +1019,8 @@ function takeLastRecurring_(userId) {
 function parseRecurringEditByName_(text) {
   var t = normalizeCycleText_(text).replace(/\s+/g, ' ').trim();
   var m = t.match(/^(?:修改|更改|更新|調整|設定|改)?\s*(.+?)\s*的?\s*(?:扣款日期|扣款日|扣款|日期|週期)?\s*(?:改成|改為|改|為|成|到|[:：])?\s*(每(?:個)?(?:月|年|\d+\s*個月)[\s\S]*)$/);
+  // 「水費 下次扣款 12/11」「水費下次扣款改成12/11」
+  if (!m) m = t.match(/^(?:修改|更改|更新|調整|設定|改)?\s*(.+?)\s*的?\s*(下一?次(?:扣款|入帳)?(?:日|日期)?\s*(?:改成|改為|為|是|到|[:：])?\s*\d{1,2}\s*[\/月]\s*\d{1,2}\s*[日號]?)$/);
   if (!m) return null;
   var name = m[1].trim().toLowerCase();
   if (!name) return null;
@@ -1138,7 +1139,7 @@ function parseRecurringBody_(verb, kind, body0) {
       cmd.amount = +amount[1];
     } else if (token === '不固定' || token === '金額不固定' || token === '只提醒') {
       cmd.amountBlank = true;
-    } else if (/^(扣款|扣|繳費|繳|付款|入帳|一次|扣款日)$/.test(token) && nameParts.length > 0) {
+    } else if ((/^(扣款|扣|繳費|繳|付款|入帳|一次|扣款日)$/.test(token) || /^下一?次(扣款|入帳)?(日|日期)?(改成|改為|為|是|到)?$/.test(token)) && nameParts.length > 0) {
       // 「20號扣款」的贅字，不算名稱
     } else if (CATEGORIES.indexOf(token) >= 0) {
       cmd.category = token;
