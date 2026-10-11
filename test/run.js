@@ -1370,6 +1370,12 @@ test('「9月薪水」記到 9 月，記錯月份可以改日期', () => {
   env.post({ type: 'text', id: '8', text: '8月獎金改6000' });
   assert.match(env.replies[7], /改成：\d{4}-08-\d{2} 收入 獎金 \$6,000/);
   assert.strictEqual(p('我改搭計程車 300'), null);
+
+  // 從說明整段複製貼上（編號＋說明、兩行一起）也看得懂
+  env.post({ type: 'text', id: '9', text: '收入 紅利 3000' });
+  env.post({ type: 'text', id: '10', text: '1.\t修改 紅利 3000 月份 7月：把記成 10 月的那筆改到 7 月。\n\t2.\t7月紅利改3500元：再把金額改成 3,500 元。' });
+  const pasted = env.replies[env.replies.length - 1];
+  assert.match(pasted, /改成：\d{4}-07-\d{2} 收入 紅利 \$3,000[\s\S]*改成：\d{4}-07-\d{2} 收入 紅利 \$3,500/);
 });
 
 test('AI 把「9月薪水」記成今天時，改成 9 月', () => {

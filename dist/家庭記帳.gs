@@ -3005,7 +3005,25 @@ function handleEvent_(event) {
       }));
       return;
     }
-    var modifyCmd = parseModifyCommand_(text, today0);
+    // 從說明複製貼上的「1. 修改 薪水 89000 月份 9月：把…」：去掉編號和後面的說明，多行就逐行修改
+    var modifyCmds = text.split(/\n+/).map(stripPastedNote_).filter(function (line) {
+      return line;
+    }).map(function (line) {
+      return parseModifyCommand_(line, today0);
+    });
+    var modifyOk = modifyCmds.length > 0 && modifyCmds.every(function (c) {
+      return c && c.action !== 'invalid';
+    });
+    if (modifyCmds.length > 1 && modifyOk) {
+      replyText_(event.replyToken, withLock_(function () {
+        return modifyCmds.map(function (c) {
+          return applyModifyCommand_(c, event.source.userId);
+        }).join('\n\n');
+      }));
+      return;
+    }
+    var modifyCmd = parseModifyCommand_(text, today0) || (modifyCmds.length === 1 ? modifyCmds[0] : null);
+    if (modifyCmd && modifyCmd.action === 'invalid' && modifyCmds.length === 1 && modifyOk) modifyCmd = modifyCmds[0];
     if (modifyCmd) {
       replyText_(event.replyToken, withLock_(function () {
         return applyModifyCommand_(modifyCmd, event.source.userId);
@@ -3105,6 +3123,14 @@ function handleEvent_(event) {
     }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n點下面的按鈕，或傳「說明」看使用方式。', mainMenu_());
   }
+}
+
+/** 「1. 修改 薪水 89000 月份 9月：把記成 10 月的那筆…」→「修改 薪水 89000 月份 9月」 */
+function stripPastedNote_(line) {
+  return String(line).trim()
+    .replace(/^\d+\s*[.、)．]\s*/, '')
+    .replace(/\s*[：:]\s*(把|再|將|先|→).*$/, '')
+    .trim();
 }
 
 function dedupeReceiptEntries_(entries) {
