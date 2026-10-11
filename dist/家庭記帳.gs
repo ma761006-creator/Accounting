@@ -1007,7 +1007,7 @@ function ensureDailyTrigger_() {
  * 名稱要和固定支出／固定收入清單裡的項目一樣才算，回傳固定支出指令；否則回傳 null。
  */
 function parseRecurringEditByName_(text) {
-  var t = normalizeText_(text).replace(/\s+/g, ' ').trim();
+  var t = normalizeCycleText_(text).replace(/\s+/g, ' ').trim();
   var m = t.match(/^(?:修改|更改|更新|調整|設定|改)?\s*(.+?)\s*的?\s*(?:扣款日期|扣款日|扣款|日期|週期)?\s*(?:改成|改為|改|為|成|到|[:：])?\s*(每(?:個)?(?:月|年|\d+\s*個月)[\s\S]*)$/);
   if (!m) return null;
   var name = m[1].trim().toLowerCase();
@@ -1021,7 +1021,16 @@ function parseRecurringEditByName_(text) {
 }
 
 function parseRecurringCommand_(text) {
-  var t = normalizeText_(text)
+  var t = normalizeCycleText_(text);
+  // 「修改固定支出房租…」「刪除固定支出 房租」：開頭的動詞
+  var m = t.match(/^(修改|更改|更新|調整|設定|新增|改|刪除|移除|取消)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
+  if (!m) return null;
+  return parseRecurringBody_(m[1] || '', m[2], m[3]);
+}
+
+/** 各種週期說法統一成「每月」「每N個月」「每年」，去掉「扣款一次」這類贅字。 */
+function normalizeCycleText_(text) {
+  return normalizeText_(text)
     .replace(/每個月/g, '每月')
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月')
@@ -1031,12 +1040,13 @@ function parseRecurringCommand_(text) {
     .replace(/(\d+)\s*個月(一次|扣一次|繳一次)/g, '每$1個月')
     .replace(/半年(一次|扣一次|繳一次)?|每半年/g, '每6個月')
     .replace(/(一年|每年)(一次|扣一次|繳一次)/g, '每年')
-    .replace(/每月(一次|扣一次|繳一次)/g, '每月');
-  // 「修改固定支出房租…」「刪除固定支出 房租」：開頭的動詞
-  var m = t.match(/^(修改|更改|更新|調整|設定|新增|改|刪除|移除|取消)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
-  if (!m) return null;
-  var verb = m[1] || '';
-  var kind = m[2];
+    .replace(/每月(一次|扣一次|繳一次)/g, '每月')
+    // 「每兩個月扣款一次」「每月繳費一次」：週期後面的贅字
+    .replace(/(每\d+個月|每月|每年)\s*(扣款|扣|繳費|繳|付款|付|入帳)?\s*一次/g, '$1');
+}
+
+function parseRecurringBody_(verb, kind, body0) {
+  var m = [null, verb, kind, body0];
   // 從清單複製的格式：「・股票定期定額（李宗諭）｜$17,000｜每月 10 號｜下次 2026-11-10」
   // 「10/2扣款」「從10月2日開始」：某一次的扣款日，用來算週期（「每年 3/15」是每年的日期，不算）
   var anchor = null;
@@ -1117,6 +1127,8 @@ function parseRecurringCommand_(text) {
       cmd.amount = +amount[1];
     } else if (token === '不固定' || token === '金額不固定' || token === '只提醒') {
       cmd.amountBlank = true;
+    } else if (/^(扣款|扣|繳費|繳|付款|入帳|一次|扣款日)$/.test(token) && nameParts.length > 0) {
+      // 「20號扣款」的贅字，不算名稱
     } else if (CATEGORIES.indexOf(token) >= 0) {
       cmd.category = token;
     } else {

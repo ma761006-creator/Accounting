@@ -1455,6 +1455,13 @@ test('固定支出：「兩個月一次 10/2扣款」', () => {
   assert.strictEqual(n('2026-10-11', 12, 20, 2), '2026-10-20');
   assert.strictEqual(n('2026-02-11', 12, 2, 2), '2026-04-02');
   assert.strictEqual(env.context.addMonths_('2026-01-15', -2, 15), '2025-11-15');
+  env.post({ type: 'text', id: '0', text: '固定支出 水費 800 每月20號扣款' });
+  env.post({ type: 'text', id: '00', text: '水費 每兩個月扣款一次' });
+  assert.match(env.replies[1], /已更新固定支出[\s\S]*水費（爸爸）｜\$800｜每 2 個月 20 號/);
+  env.post({ type: 'text', id: '000', text: '固定支出 水費 每兩個月扣款一次' });
+  assert.match(env.replies[2], /水費（爸爸）｜\$800｜每 2 個月 20 號/);
+  assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => /水費/.test(r[0])).length, 1);
+  env.replies.length = 0;
   env.post({ type: 'text', id: '1', text: '固定支出 大春煉皂 400元 兩個月一次 10/2扣款' });
   assert.match(env.replies[0], /大春煉皂（爸爸）｜\$400｜每 2 個月 2 號/);
 });
