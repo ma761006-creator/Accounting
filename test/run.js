@@ -1284,6 +1284,10 @@ test('預算：設定、使用狀況、記帳後提醒與 631 建議', () => {
   assert.strictEqual(p('預算 交通 10%').percent, 10);
   assert.strictEqual(p('預算 餐飲 刪除').action, 'clear');
   assert.strictEqual(p('631').action, 'suggest');
+  assert.strictEqual(p('修改預算為 20000').amount, 20000);
+  assert.strictEqual(p('把餐飲預算改成5000').category, '餐飲');
+  assert.strictEqual(p('調整總預算 3萬').amount, 30000);
+  assert.strictEqual(p('預算改20000').amount, 20000);
   assert.strictEqual(p('午餐 120'), null);
 
   env.post({ type: 'text', id: 'b0', text: '預算 交通 10%' });
