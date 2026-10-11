@@ -16,6 +16,7 @@ function helpText_() {
     '',
     '🔎 查詢：本月、上月、本週、今天',
     '・本月 餐飲、全聯花多少、本月 明細',
+    '・某個月：9月、9月 明細、9月收入；每個月一覽：每月',
     '📊 分析：分析、本週分析、上月分析',
     '🔥 洞察：分析裡會列出最大支出類別、最高單筆、最高單日',
     '',
@@ -47,6 +48,7 @@ function mainMenu_() {
     { label: '🔁 固定支出', text: '固定支出' },
     { label: '⏰ 扣款提醒', text: '近期扣款' },
     { label: '💰 本月收入', text: '本月收入' },
+    { label: '📅 每月收支', text: '每月' },
     { label: '📋 年度計畫', text: '年度計畫' },
     { label: '📌 本月預算', text: '預算' },
     { label: '💰 怎麼記帳', text: '記帳' },
@@ -61,6 +63,7 @@ function queryMenu_() {
     { label: '本月', text: '本月' },
     { label: '上月', text: '上月' },
     { label: '📋 本月明細', text: '本月 明細' },
+    { label: '📅 每月收支', text: '每月' },
     { label: '📊 分析', text: '分析' }
   ];
 }
@@ -182,6 +185,10 @@ function handleEvent_(event) {
       replyText_(event.replyToken, formatRecurringList_(recurringName));
       return;
     }
+    if (parseMonthlyCommand_(text)) {
+      replyText_(event.replyToken, formatMonthly_(today0), queryMenu_());
+      return;
+    }
     var planCmd = parsePlanCommand_(text);
     if (planCmd) {
       replyText_(event.replyToken, applyPlanCommand_(planCmd, today0), mainMenu_());
@@ -201,7 +208,25 @@ function handleEvent_(event) {
       }));
       return;
     }
-    var modifyCmd = parseModifyCommand_(text, today0);
+    // 從說明複製貼上的「1. 修改 薪水 89000 月份 9月：把…」：去掉編號和後面的說明，多行就逐行修改
+    var modifyCmds = text.split(/\n+/).map(stripPastedNote_).filter(function (line) {
+      return line;
+    }).map(function (line) {
+      return parseModifyCommand_(line, today0);
+    });
+    var modifyOk = modifyCmds.length > 0 && modifyCmds.every(function (c) {
+      return c && c.action !== 'invalid';
+    });
+    if (modifyCmds.length > 1 && modifyOk) {
+      replyText_(event.replyToken, withLock_(function () {
+        return modifyCmds.map(function (c) {
+          return applyModifyCommand_(c, event.source.userId);
+        }).join('\n\n');
+      }));
+      return;
+    }
+    var modifyCmd = parseModifyCommand_(text, today0) || (modifyCmds.length === 1 ? modifyCmds[0] : null);
+    if (modifyCmd && modifyCmd.action === 'invalid' && modifyCmds.length === 1 && modifyOk) modifyCmd = modifyCmds[0];
     if (modifyCmd) {
       replyText_(event.replyToken, withLock_(function () {
         return applyModifyCommand_(modifyCmd, event.source.userId);
@@ -301,6 +326,14 @@ function handleEvent_(event) {
     }
     replyText_(event.replyToken, '看不出要記帳還是查詢 🤔' + hint + '\n點下面的按鈕，或傳「說明」看使用方式。', mainMenu_());
   }
+}
+
+/** 「1. 修改 薪水 89000 月份 9月：把記成 10 月的那筆…」→「修改 薪水 89000 月份 9月」 */
+function stripPastedNote_(line) {
+  return String(line).trim()
+    .replace(/^\d+\s*[.、)．]\s*/, '')
+    .replace(/\s*[：:]\s*(把|再|將|先|→).*$/, '')
+    .trim();
 }
 
 function dedupeReceiptEntries_(entries) {

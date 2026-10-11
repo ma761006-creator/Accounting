@@ -186,6 +186,22 @@ function matchDatePrefix_(s, today) {
   return null;
 }
 
+/** 查詢的月份：「9月」「9月份」「2026年9月」→ 那個月 1 號到月底（本月到今天；比今天晚就當作去年）。 */
+function matchMonthRange_(s, today) {
+  var m = s.match(/^(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月份?(?![\d號日])/);
+  if (!m || +m[2] < 1 || +m[2] > 12) return null;
+  var month = +m[2];
+  var y = m[1] ? +m[1] : +today.slice(0, 4);
+  var start = ymd_(y, month, 1);
+  if (!m[1] && start > today) {
+    y -= 1;
+    start = ymd_(y, month, 1);
+  }
+  var end = ymd_(y, month, daysInMonth_(y, month));
+  if (end > today) end = today;
+  return { range: [start, end], length: m[0].length };
+}
+
 /** 開頭只有月份：「9月薪水」「3月份電費」→ 那個月的同一天（比今天晚就當作去年）。 */
 function matchMonthPrefix_(s, today) {
   var m = s.match(/^(\d{1,2})月份?(?![\d號日])\s*/);
@@ -268,7 +284,12 @@ function parseQuery_(t, today) {
 
   var range = null;
   var keyword = '';
-  if (tokens.length && periods.hasOwnProperty(tokens[0])) {
+  var monthHit = tokens.length ? matchMonthRange_(tokens.join(' '), today) : null;
+  if (monthHit && (monthHit.length === tokens[0].length || explicit)) {
+    // 「9月」「9月 餐飲」「2026年9月 明細」「9月全聯花多少」
+    range = monthHit.range;
+    keyword = tokens.join(' ').slice(monthHit.length).trim();
+  } else if (tokens.length && periods.hasOwnProperty(tokens[0])) {
     // 「本月」「本月 全聯」
     range = periods[tokens[0]];
     keyword = tokens.slice(1).join(' ');

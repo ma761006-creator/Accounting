@@ -55,7 +55,7 @@ function parseMessage_(input, today) {
 
 function isFixedCommand_(text) {
   var t = normalizeText_(text).replace(/\s+/g, ' ');
-  var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年)';
+  var period = '(今天|昨天|本週|這週|上週|本月|這個月|上月|上個月|今年|(\\d{4}年)?\\d{1,2}月份?)';
   return new RegExp('^' + period + '( ?(明細|收入))?( ?明細)?$').test(t) ||
     new RegExp('^' + period + '? ?分析$').test(t);
 }
