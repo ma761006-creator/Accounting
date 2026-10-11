@@ -134,7 +134,7 @@ function addMonths_(ymd, n, day) {
   var y = +ymd.slice(0, 4);
   var m = +ymd.slice(5, 7) + n;
   y += Math.floor((m - 1) / 12);
-  m = ((m - 1) % 12) + 1;
+  m = (((m - 1) % 12) + 12) % 12 + 1;
   return ymd_(y, m, Math.min(day, daysInMonth_(y, m)));
 }
 
@@ -146,6 +146,16 @@ function daysInMonth_(y, m) {
 function cycleText_(item) {
   if (item.every === 12 && item.next) return '每年 ' + (+item.next.slice(5, 7)) + '/' + item.day;
   return (item.every === 1 ? '每月' : '每 ' + item.every + ' 個月') + ' ' + item.day + ' 號';
+}
+
+/** 「10/2 扣款、每 2 個月一次」：從那次扣款日往後推，找出今天以後的第一次。 */
+function nextFromAnchor_(today, month, day, every) {
+  var y = +today.slice(0, 4);
+  var next = ymd_(y, month, Math.min(day, daysInMonth_(y, month)));
+  // 比今天晚太多（例如 12/2 當作今年，但其實是去年 12/2 開始）就往前推回去
+  while (addMonths_(next, -every, day) >= today) next = addMonths_(next, -every, day);
+  while (next < today) next = addMonths_(next, every, day);
+  return next;
 }
 
 /** 從今天起算，下一個「month 月 day 號」。 */
@@ -232,14 +242,29 @@ function parseRecurringCommand_(text) {
   var t = normalizeText_(text)
     .replace(/每個月/g, '每月')
     .replace(/每(兩|二)個?月/g, '每2個月')
-    .replace(/每三個?月/g, '每3個月');
+    .replace(/每三個?月/g, '每3個月')
+    // 「兩個月一次」「隔月」「半年一次」「一年一次」
+    .replace(/(兩|二)個?月(一次|扣一次|繳一次)|隔月/g, '每2個月')
+    .replace(/三個?月(一次|扣一次|繳一次)|每季/g, '每3個月')
+    .replace(/(\d+)\s*個月(一次|扣一次|繳一次)/g, '每$1個月')
+    .replace(/半年(一次|扣一次|繳一次)?|每半年/g, '每6個月')
+    .replace(/(一年|每年)(一次|扣一次|繳一次)/g, '每年')
+    .replace(/每月(一次|扣一次|繳一次)/g, '每月');
   // 「修改固定支出房租…」「刪除固定支出 房租」：開頭的動詞
   var m = t.match(/^(修改|更改|更新|調整|設定|新增|改|刪除|移除|取消)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
   if (!m) return null;
   var verb = m[1] || '';
   var kind = m[2];
   // 從清單複製的格式：「・股票定期定額（李宗諭）｜$17,000｜每月 10 號｜下次 2026-11-10」
-  var rest = m[3]
+  // 「10/2扣款」「從10月2日開始」：某一次的扣款日，用來算週期（「每年 3/15」是每年的日期，不算）
+  var anchor = null;
+  var body = m[3].replace(/(^|[^年\d\/\-])\s*(?:從\s*)?(\d{1,2})\s*(?:\/|月)\s*(\d{1,2})\s*(?:日|號)?\s*(?:開始)?\s*(?:扣款|扣|繳費|繳|入帳)?(?=\s|$)/,
+    function (all, pre, mo, d) {
+      if (anchor || +mo < 1 || +mo > 12 || +d < 1 || +d > 31) return all;
+      anchor = { month: +mo, day: +d };
+      return pre + ' ';
+    });
+  var rest = body
     .replace(/[｜|]/g, ' ')
     .replace(/(^|\n)\s*[・•]\s*/g, '$1')
     .replace(/下次(扣款|入帳)?\s*[:：]?\s*\d{4}-\d{1,2}-\d{1,2}/g, ' ')
@@ -325,6 +350,11 @@ function parseRecurringCommand_(text) {
     cmd.owner = ownerMatch[2] === '全家' ? '' : ownerMatch[2];
   }
   if (kind === '固定收入') cmd.category = INCOME_CATEGORY;
+  if (anchor) {
+    cmd.anchorMonth = anchor.month;
+    if (cmd.day === null) cmd.day = anchor.day;
+    if (cmd.every === 12 && cmd.month === null) cmd.month = anchor.month;
+  }
   if (!cmd.name) return { action: 'invalid' };
   // 沒有金額、日期、週期的不算指令（例如「固定支出好多」「固定支出有哪些」），交給問句判斷
   if (cmd.amount === null && !cmd.amountBlank && cmd.day === null && cmd.every === null && !cmd.category) return null;
@@ -409,6 +439,7 @@ function applyRecurringCommand_(cmd, today, setter) {
     var current = readRecurringRow_(r);
     // 改了扣款日或週期，或原本沒有下次扣款日，就重新計算
     var next = cmd.month ? nextYearlyDate_(today, cmd.month, day)
+      : cmd.anchorMonth ? nextFromAnchor_(today, cmd.anchorMonth, day, every)
       : (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
     // 原本沒有成員（舊資料）的，改成這位家人的
     var rowOwner = String(r[RCOL.owner] || '').trim() || owner;
@@ -421,6 +452,7 @@ function applyRecurringCommand_(cmd, today, setter) {
     var newEvery = cmd.every || 1;
     // 沒說幾號就用今天的日期，從下一期開始（今天這期多半已經付了）
     var newNext = cmd.month ? nextYearlyDate_(today, cmd.month, newDay)
+      : cmd.anchorMonth ? nextFromAnchor_(today, cmd.anchorMonth, newDay, newEvery)
       : cmd.day ? firstDueDate_(today, newDay) : addMonths_(today, newEvery, newDay);
     item = {
       name: cmd.name,
