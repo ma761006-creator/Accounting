@@ -1357,6 +1357,19 @@ test('「9月薪水」記到 9 月，記錯月份可以改日期', () => {
   assert.strictEqual(dateOf(row), expect(8));
   env.post({ type: 'text', id: '3', text: '恢復' });
   assert.strictEqual(dateOf(env.rows.find((r) => r[3] === '薪水')), expect(9));
+
+  // 「9月薪水改109487元」：指定月份改金額
+  env.post({ type: 'text', id: '4', text: '9月薪水改109487元' });
+  assert.match(env.replies[3], /已修改[\s\S]*改成：\d{4}-09-\d{2} 收入 薪水 \$109,487/);
+
+  // 當初日期記錯：找不到時告訴他怎麼先改月份
+  env.post({ type: 'text', id: '5', text: '收入 獎金 5000' });
+  env.post({ type: 'text', id: '6', text: '8月獎金改6000' });
+  assert.match(env.replies[5], /找不到你記的「8月 獎金」[\s\S]*先傳「修改 獎金 5000 月份 8月」/);
+  env.post({ type: 'text', id: '7', text: '修改 獎金 5000 月份 8月' });
+  env.post({ type: 'text', id: '8', text: '8月獎金改6000' });
+  assert.match(env.replies[7], /改成：\d{4}-08-\d{2} 收入 獎金 \$6,000/);
+  assert.strictEqual(p('我改搭計程車 300'), null);
 });
 
 test('AI 把「9月薪水」記成今天時，改成 9 月', () => {

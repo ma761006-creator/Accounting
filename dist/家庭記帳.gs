@@ -1969,11 +1969,11 @@ function parseModifyCommand_(text, today) {
   }
 
   // 「午餐改成150」「鯖魚改成 餐飲」
-  var inline = t.match(/^(.+?)\s*改成\s*(.+)$/);
+  var inline = t.match(/^(.+?)\s*改(?:成|為)?\s*(.+)$/);
   var edit = t.match(/^(修改|更正|更改|改成)\s*(.*)$/);
   if (!inline && !edit) return null;
 
-  var cmd = { action: 'edit', keyword: '', date: '', amount: null, newAmount: null, newCategory: '', newItem: '', newDate: '', newMonth: 0 };
+  var cmd = { action: 'edit', keyword: '', date: '', month: '', amount: null, newAmount: null, newCategory: '', newItem: '', newDate: '', newMonth: 0 };
   var keywordPart;
   var changePart;
   if (inline && !edit) {
@@ -2031,6 +2031,7 @@ function parseModifyCommand_(text, today) {
   if (!target2) return { action: 'invalid', usage: modifyUsage_() };
   cmd.keyword = target2.keyword;
   cmd.date = target2.date;
+  cmd.month = target2.month;
   cmd.amount = target2.amount;
   return cmd;
 }
@@ -2047,15 +2048,21 @@ function parseDateValue_(s, today) {
   return null;
 }
 
-/** 「昨天 停車 60」→ { date, keyword, amount }，空字串代表「最近一筆」。 */
+/** 「昨天 停車 60」「9月 薪水」→ { date, month, keyword, amount }，空字串代表「最近一筆」。 */
 function parseTarget_(s, today) {
-  var target = { keyword: '', date: '', amount: null };
+  var target = { keyword: '', date: '', month: '', amount: null };
   s = s.replace(/^(剛剛|剛才|最近一筆|上一筆|那筆|的)\s*/, '').replace(/(那筆|的)$/, '').trim();
   if (!s) return target;
   var d = matchDatePrefix_(s, today);
   if (d) {
     target.date = d.date;
     s = s.slice(d.length).trim();
+  } else {
+    var mo = matchMonthPrefix_(s, today);
+    if (mo) {
+      target.month = mo.date.slice(0, 7);
+      s = s.slice(mo.length).trim();
+    }
   }
   var m = s.match(/^(.*?)\s*(\d+(?:\.\d+)?)\s*(元|塊錢|塊)?$/);
   if (m && m[1].trim()) {
@@ -2080,7 +2087,7 @@ function findTargetRows_(userId, target) {
     return v instanceof Date ? Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd') : String(v);
   };
 
-  var hasCriteria = target.keyword || target.date || target.amount;
+  var hasCriteria = target.keyword || target.date || target.month || target.amount;
   for (var i = values.length - 1; i >= 0; i--) {
     var r = values[i];
     if (r[COL.userId] !== userId) continue;
@@ -2097,6 +2104,7 @@ function findTargetRows_(userId, target) {
     var text = (String(r[COL.item]) + ' ' + String(r[COL.note])).toLowerCase();
     if (target.keyword && text.indexOf(target.keyword.toLowerCase()) < 0) continue;
     if (target.date && dateOf(r[COL.date]) !== target.date) continue;
+    if (target.month && dateOf(r[COL.date]).slice(0, 7) !== target.month) continue;
     if (target.amount && Number(r[COL.amount]) !== target.amount) continue;
     return { rows: [{ row: i + 2, values: r }] };
   }
@@ -2108,12 +2116,23 @@ function describeRow_(r) {
   return d + ' ' + r[COL.category] + ' ' + r[COL.item] + ' $' + formatMoney_(r[COL.amount]);
 }
 
-function notFound_(target) {
-  if (!target.keyword && !target.date && !target.amount) return '找不到你可以修改或刪除的紀錄。';
-  var desc = [target.date, target.keyword, target.amount ? '$' + target.amount : ''].filter(function (x) {
+function notFound_(target, userId) {
+  if (!target.keyword && !target.date && !target.month && !target.amount) return '找不到你可以修改或刪除的紀錄。';
+  var month = target.month ? +target.month.slice(5) + '月' : '';
+  var desc = [target.date || month, target.keyword, target.amount ? '$' + target.amount : ''].filter(function (x) {
     return x;
   }).join(' ');
-  return '找不到你記的「' + desc + '」。\n只能修改或刪除自己記的帳；其他人記的可以到試算表直接改。';
+  var text = '找不到你記的「' + desc + '」。';
+  // 指定了日期或月份卻找不到：可能是當初記錯日期，列出同名的那筆，教他先改日期
+  if ((target.date || target.month) && target.keyword && userId) {
+    var other = findTargetRows_(userId, { keyword: target.keyword, date: '', month: '', amount: target.amount }).rows[0];
+    if (other) {
+      return text + '\n你最近記的「' + target.keyword + '」是：' + describeRow_(other.values) +
+        '\n如果這筆其實是' + (month || target.date) + '的，先傳「修改 ' + other.values[COL.item] + ' ' + Number(other.values[COL.amount]) +
+        ' ' + (month ? '月份 ' + month : '日期 ' + target.date) + '」，再修改金額。';
+    }
+  }
+  return text + '\n只能修改或刪除自己記的帳；其他人記的可以到試算表直接改。';
 }
 
 /**
@@ -2236,13 +2255,13 @@ function applyModifyCommand_(cmd, userId) {
       return item.name.toLowerCase() === cmd.keyword.toLowerCase();
     });
     if (isRecurring) return '「' + cmd.keyword + '」是固定支出，要刪除請傳「固定支出 刪除 ' + cmd.keyword + '」。';
-    return notFound_(cmd);
+    return notFound_(cmd, userId);
   }
   var sheet = getLedgerSheet_();
 
   if (cmd.action === 'delete') {
     // 只傳「刪除」卻會刪掉好幾筆時，先列出來請對方確認，避免一次誤刪多筆
-    var noCriteria = !cmd.keyword && !cmd.date && !cmd.amount;
+    var noCriteria = !cmd.keyword && !cmd.date && !cmd.month && !cmd.amount;
     if (noCriteria && found.rows.length > 1 && !cmd.confirmed) {
       return '你最近一次記了 ' + found.rows.length + ' 筆：\n' + found.rows.map(function (x) {
         return '・' + describeRow_(x.values);
