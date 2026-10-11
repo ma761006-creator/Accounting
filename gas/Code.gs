@@ -28,6 +28,7 @@ function helpText_() {
     '',
     '💰 收入：收入 醫院 85000、本月收入、固定收入 薪水 85000 每月5號',
     '📋 年度計畫：年度計畫、存錢目標 100萬',
+    '📌 預算：預算、預算 30000、預算 餐飲 8000、預算建議',
     '',
     '分類：' + CATEGORIES.join('、'),
     '',
@@ -47,6 +48,7 @@ function mainMenu_() {
     { label: '⏰ 扣款提醒', text: '近期扣款' },
     { label: '💰 本月收入', text: '本月收入' },
     { label: '📋 年度計畫', text: '年度計畫' },
+    { label: '📌 本月預算', text: '預算' },
     { label: '💰 怎麼記帳', text: '記帳' },
     { label: '✏️ 修改刪除', text: '修改' }
   ];
@@ -185,6 +187,13 @@ function handleEvent_(event) {
       replyText_(event.replyToken, applyPlanCommand_(planCmd, today0), mainMenu_());
       return;
     }
+    var budgetCmd = parseBudgetCommand_(text);
+    if (budgetCmd) {
+      replyText_(event.replyToken, withLock_(function () {
+        return applyBudgetCommand_(budgetCmd, today0);
+      }), [{ label: '📌 本月預算', text: '預算' }, { label: '💡 預算建議', text: '預算建議' }]);
+      return;
+    }
     var keywordCmd = parseKeywordCommand_(text);
     if (keywordCmd) {
       replyText_(event.replyToken, withLock_(function () {
@@ -237,7 +246,15 @@ function handleEvent_(event) {
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
-    replyText_(event.replyToken, formatRecorded_(parsed.entries, recorder, parsed.statedTotal));
+    var recordedText = formatRecorded_(parsed.entries, recorder, parsed.statedTotal);
+    try {
+      var alerts = budgetAlerts_(parsed.entries, today);
+      if (alerts) recordedText += '\n\n' + alerts;
+    } catch (err) {
+      // 預算檢查失敗不影響記帳
+      console.warn('預算檢查失敗：' + (err.message || err));
+    }
+    replyText_(event.replyToken, recordedText);
     return;
   }
 
