@@ -220,12 +220,23 @@ function ensureDailyTrigger_() {
  *   固定支出 刪除 Netflix             → 刪除
  * 「訂閱」開頭也可以。
  */
+var LAST_RECURRING_KEY = 'lastrec:';
+
+/** 10 分鐘內剛新增的固定支出（給「刪除」用），沒有回傳 null。 */
+function takeLastRecurring_(userId) {
+  var cache = CacheService.getScriptCache();
+  var raw = userId ? cache.get(LAST_RECURRING_KEY + userId) : null;
+  if (!raw) return null;
+  cache.remove(LAST_RECURRING_KEY + userId);
+  return JSON.parse(raw);
+}
+
 /**
  * 沒寫「固定支出」，但改的是已設定的固定項目：「修改 iCloud+ 扣款日期 每月3號」「Netflix 改成每月20號」。
  * 名稱要和固定支出／固定收入清單裡的項目一樣才算，回傳固定支出指令；否則回傳 null。
  */
 function parseRecurringEditByName_(text) {
-  var t = normalizeText_(text).replace(/\s+/g, ' ').trim();
+  var t = normalizeCycleText_(text).replace(/\s+/g, ' ').trim();
   var m = t.match(/^(?:修改|更改|更新|調整|設定|改)?\s*(.+?)\s*的?\s*(?:扣款日期|扣款日|扣款|日期|週期)?\s*(?:改成|改為|改|為|成|到|[:：])?\s*(每(?:個)?(?:月|年|\d+\s*個月)[\s\S]*)$/);
   if (!m) return null;
   var name = m[1].trim().toLowerCase();
@@ -239,7 +250,16 @@ function parseRecurringEditByName_(text) {
 }
 
 function parseRecurringCommand_(text) {
-  var t = normalizeText_(text)
+  var t = normalizeCycleText_(text);
+  // 「修改固定支出房租…」「刪除固定支出 房租」：開頭的動詞
+  var m = t.match(/^(修改|更改|更新|調整|設定|新增|改|刪除|移除|取消)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
+  if (!m) return null;
+  return parseRecurringBody_(m[1] || '', m[2], m[3]);
+}
+
+/** 各種週期說法統一成「每月」「每N個月」「每年」，去掉「扣款一次」這類贅字。 */
+function normalizeCycleText_(text) {
+  return normalizeText_(text)
     .replace(/每個月/g, '每月')
     .replace(/每(兩|二)個?月/g, '每2個月')
     .replace(/每三個?月/g, '每3個月')
@@ -249,12 +269,13 @@ function parseRecurringCommand_(text) {
     .replace(/(\d+)\s*個月(一次|扣一次|繳一次)/g, '每$1個月')
     .replace(/半年(一次|扣一次|繳一次)?|每半年/g, '每6個月')
     .replace(/(一年|每年)(一次|扣一次|繳一次)/g, '每年')
-    .replace(/每月(一次|扣一次|繳一次)/g, '每月');
-  // 「修改固定支出房租…」「刪除固定支出 房租」：開頭的動詞
-  var m = t.match(/^(修改|更改|更新|調整|設定|新增|改|刪除|移除|取消)?\s*(固定支出|訂閱|固定收入)([\s\S]*)$/);
-  if (!m) return null;
-  var verb = m[1] || '';
-  var kind = m[2];
+    .replace(/每月(一次|扣一次|繳一次)/g, '每月')
+    // 「每兩個月扣款一次」「每月繳費一次」：週期後面的贅字
+    .replace(/(每\d+個月|每月|每年)\s*(扣款|扣|繳費|繳|付款|付|入帳)?\s*一次/g, '$1');
+}
+
+function parseRecurringBody_(verb, kind, body0) {
+  var m = [null, verb, kind, body0];
   // 從清單複製的格式：「・股票定期定額（李宗諭）｜$17,000｜每月 10 號｜下次 2026-11-10」
   // 「10/2扣款」「從10月2日開始」：某一次的扣款日，用來算週期（「每年 3/15」是每年的日期，不算）
   var anchor = null;
@@ -335,6 +356,8 @@ function parseRecurringCommand_(text) {
       cmd.amount = +amount[1];
     } else if (token === '不固定' || token === '金額不固定' || token === '只提醒') {
       cmd.amountBlank = true;
+    } else if (/^(扣款|扣|繳費|繳|付款|入帳|一次|扣款日)$/.test(token) && nameParts.length > 0) {
+      // 「20號扣款」的贅字，不算名稱
     } else if (CATEGORIES.indexOf(token) >= 0) {
       cmd.category = token;
     } else {
@@ -392,11 +415,11 @@ function listRecurringItems_() {
 }
 
 /** 執行固定支出指令，回傳要回覆的文字。 */
-function applyRecurringCommand_(cmd, today, setter) {
+function applyRecurringCommand_(cmd, today, setter, userId) {
   if (cmd.action === 'batch') {
     return cmd.cmds.map(function (c) {
       if (c.action === 'invalid') return '⚠️ 看不懂「' + (c.line || '') + '」，請寫成「名稱 金額 每月幾號」';
-      return applyRecurringCommand_(c, today, setter);
+      return applyRecurringCommand_(c, today, setter, userId);
     }).join('\n\n');
   }
   if (cmd.action === 'list') return formatRecurringList_();
@@ -464,6 +487,8 @@ function applyRecurringCommand_(cmd, today, setter) {
       owner: owner
     };
     sheet.appendRow([item.name, item.amount, item.category, item.day, item.every, item.next, '是', item.owner]);
+    // 剛新增完馬上傳「刪除」，刪的是這筆固定支出，而不是帳本裡最近一筆
+    if (userId) CacheService.getScriptCache().put(LAST_RECURRING_KEY + userId, JSON.stringify({ name: item.name, owner: item.owner }), 10 * 60);
     // 別的家人已經有同名項目：提醒這是另外一筆，避免房租這類共用支出算兩次
     var others = listRecurringItems_().filter(function (x) {
       return x.name.toLowerCase() === item.name.toLowerCase() && x.owner !== item.owner;

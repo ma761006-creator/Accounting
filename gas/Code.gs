@@ -172,7 +172,7 @@ function handleEvent_(event) {
     if (recurringCmd) {
       var setter = getDisplayName_(event.source);
       replyText_(event.replyToken, withLock_(function () {
-        return applyRecurringCommand_(recurringCmd, today0, setter);
+        return applyRecurringCommand_(recurringCmd, today0, setter, event.source.userId);
       }));
       return;
     }
@@ -227,6 +227,18 @@ function handleEvent_(event) {
     }
     var modifyCmd = parseModifyCommand_(text, today0) || (modifyCmds.length === 1 ? modifyCmds[0] : null);
     if (modifyCmd && modifyCmd.action === 'invalid' && modifyCmds.length === 1 && modifyOk) modifyCmd = modifyCmds[0];
+    // 剛新增固定支出就傳「刪除」：刪那筆固定支出
+    var bareDelete = modifyCmd && modifyCmd.action === 'delete' && !modifyCmd.keyword && !modifyCmd.date &&
+      !modifyCmd.month && !modifyCmd.amount && !modifyCmd.confirmed;
+    var lastRecurring = bareDelete ? takeLastRecurring_(event.source.userId) : null;
+    if (lastRecurring) {
+      var deleter = getDisplayName_(event.source);
+      replyText_(event.replyToken, withLock_(function () {
+        return applyRecurringCommand_({ action: 'delete', name: lastRecurring.name, owner: lastRecurring.owner }, today0, deleter) +
+          '\n（這是剛剛新增的固定支出；要刪帳本裡的帳，請再傳一次「刪除」）';
+      }));
+      return;
+    }
     if (modifyCmd) {
       replyText_(event.replyToken, withLock_(function () {
         return applyModifyCommand_(modifyCmd, event.source.userId);
@@ -271,6 +283,8 @@ function handleEvent_(event) {
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
+    // 之後的「刪除」要刪這次記的帳，不是先前新增的固定支出
+    takeLastRecurring_(event.source.userId);
     var recordedText = formatRecorded_(parsed.entries, recorder, parsed.statedTotal);
     try {
       var alerts = budgetAlerts_(parsed.entries, today);
@@ -286,7 +300,7 @@ function handleEvent_(event) {
   if (parsed.intent === 'recurring') {
     var recurringSetter = getDisplayName_(event.source);
     replyText_(event.replyToken, withLock_(function () {
-      return applyRecurringCommand_(parsed.recurring, today, recurringSetter);
+      return applyRecurringCommand_(parsed.recurring, today, recurringSetter, event.source.userId);
     }));
     return;
   }

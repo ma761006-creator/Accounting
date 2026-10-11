@@ -1455,8 +1455,35 @@ test('固定支出：「兩個月一次 10/2扣款」', () => {
   assert.strictEqual(n('2026-10-11', 12, 20, 2), '2026-10-20');
   assert.strictEqual(n('2026-02-11', 12, 2, 2), '2026-04-02');
   assert.strictEqual(env.context.addMonths_('2026-01-15', -2, 15), '2025-11-15');
+  env.post({ type: 'text', id: '0', text: '固定支出 水費 800 每月20號扣款' });
+  env.post({ type: 'text', id: '00', text: '水費 每兩個月扣款一次' });
+  assert.match(env.replies[1], /已更新固定支出[\s\S]*水費（爸爸）｜\$800｜每 2 個月 20 號/);
+  env.post({ type: 'text', id: '000', text: '固定支出 水費 每兩個月扣款一次' });
+  assert.match(env.replies[2], /水費（爸爸）｜\$800｜每 2 個月 20 號/);
+  assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => /水費/.test(r[0])).length, 1);
+  env.replies.length = 0;
   env.post({ type: 'text', id: '1', text: '固定支出 大春煉皂 400元 兩個月一次 10/2扣款' });
   assert.match(env.replies[0], /大春煉皂（爸爸）｜\$400｜每 2 個月 2 號/);
+});
+
+test('剛新增固定支出就傳「刪除」：刪的是那筆固定支出，不是帳本', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '收入 薪水 100000' });
+  env.post({ type: 'text', id: '2', text: '固定支出 水費 535 每月11號' });
+  env.post({ type: 'text', id: '3', text: '刪除' });
+  assert.match(env.replies[2], /已刪除「水費（爸爸）」[\s\S]*剛剛新增的固定支出/);
+  assert.ok(env.rows.some((r) => r[3] === '薪水'));
+  assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => r[0] === '水費').length, 0);
+  // 再傳一次「刪除」就是帳本裡的帳
+  env.post({ type: 'text', id: '4', text: '刪除' });
+  assert.match(env.replies[3], /已刪除：\n・\d{4}-\d{2}-\d{2} 收入 薪水/);
+  // 新增固定支出後又記了帳：「刪除」刪的是那筆帳
+  env.post({ type: 'text', id: '5', text: '固定支出 瓦斯 600 每月5號' });
+  env.post({ type: 'text', id: '6', text: '午餐 120' });
+  env.post({ type: 'text', id: '7', text: '刪除' });
+  assert.match(env.replies[6], /已刪除：\n・.*午餐/);
+  assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => r[0] === '瓦斯').length, 1);
 });
 
 let failed = 0;
