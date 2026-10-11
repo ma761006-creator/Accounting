@@ -1002,6 +1002,17 @@ function ensureDailyTrigger_() {
  *   固定支出 刪除 Netflix             → 刪除
  * 「訂閱」開頭也可以。
  */
+var LAST_RECURRING_KEY = 'lastrec:';
+
+/** 10 分鐘內剛新增的固定支出（給「刪除」用），沒有回傳 null。 */
+function takeLastRecurring_(userId) {
+  var cache = CacheService.getScriptCache();
+  var raw = userId ? cache.get(LAST_RECURRING_KEY + userId) : null;
+  if (!raw) return null;
+  cache.remove(LAST_RECURRING_KEY + userId);
+  return JSON.parse(raw);
+}
+
 /**
  * 沒寫「固定支出」，但改的是已設定的固定項目：「修改 iCloud+ 扣款日期 每月3號」「Netflix 改成每月20號」。
  * 名稱要和固定支出／固定收入清單裡的項目一樣才算，回傳固定支出指令；否則回傳 null。
@@ -1186,11 +1197,11 @@ function listRecurringItems_() {
 }
 
 /** 執行固定支出指令，回傳要回覆的文字。 */
-function applyRecurringCommand_(cmd, today, setter) {
+function applyRecurringCommand_(cmd, today, setter, userId) {
   if (cmd.action === 'batch') {
     return cmd.cmds.map(function (c) {
       if (c.action === 'invalid') return '⚠️ 看不懂「' + (c.line || '') + '」，請寫成「名稱 金額 每月幾號」';
-      return applyRecurringCommand_(c, today, setter);
+      return applyRecurringCommand_(c, today, setter, userId);
     }).join('\n\n');
   }
   if (cmd.action === 'list') return formatRecurringList_();
@@ -1258,6 +1269,8 @@ function applyRecurringCommand_(cmd, today, setter) {
       owner: owner
     };
     sheet.appendRow([item.name, item.amount, item.category, item.day, item.every, item.next, '是', item.owner]);
+    // 剛新增完馬上傳「刪除」，刪的是這筆固定支出，而不是帳本裡最近一筆
+    if (userId) CacheService.getScriptCache().put(LAST_RECURRING_KEY + userId, JSON.stringify({ name: item.name, owner: item.owner }), 10 * 60);
     // 別的家人已經有同名項目：提醒這是另外一筆，避免房租這類共用支出算兩次
     var others = listRecurringItems_().filter(function (x) {
       return x.name.toLowerCase() === item.name.toLowerCase() && x.owner !== item.owner;
@@ -3110,7 +3123,7 @@ function handleEvent_(event) {
     if (recurringCmd) {
       var setter = getDisplayName_(event.source);
       replyText_(event.replyToken, withLock_(function () {
-        return applyRecurringCommand_(recurringCmd, today0, setter);
+        return applyRecurringCommand_(recurringCmd, today0, setter, event.source.userId);
       }));
       return;
     }
@@ -3165,6 +3178,18 @@ function handleEvent_(event) {
     }
     var modifyCmd = parseModifyCommand_(text, today0) || (modifyCmds.length === 1 ? modifyCmds[0] : null);
     if (modifyCmd && modifyCmd.action === 'invalid' && modifyCmds.length === 1 && modifyOk) modifyCmd = modifyCmds[0];
+    // 剛新增固定支出就傳「刪除」：刪那筆固定支出
+    var bareDelete = modifyCmd && modifyCmd.action === 'delete' && !modifyCmd.keyword && !modifyCmd.date &&
+      !modifyCmd.month && !modifyCmd.amount && !modifyCmd.confirmed;
+    var lastRecurring = bareDelete ? takeLastRecurring_(event.source.userId) : null;
+    if (lastRecurring) {
+      var deleter = getDisplayName_(event.source);
+      replyText_(event.replyToken, withLock_(function () {
+        return applyRecurringCommand_({ action: 'delete', name: lastRecurring.name, owner: lastRecurring.owner }, today0, deleter) +
+          '\n（這是剛剛新增的固定支出；要刪帳本裡的帳，請再傳一次「刪除」）';
+      }));
+      return;
+    }
     if (modifyCmd) {
       replyText_(event.replyToken, withLock_(function () {
         return applyModifyCommand_(modifyCmd, event.source.userId);
@@ -3209,6 +3234,8 @@ function handleEvent_(event) {
         source: message.type === 'image' ? '收據照片' : '文字'
       });
     });
+    // 之後的「刪除」要刪這次記的帳，不是先前新增的固定支出
+    takeLastRecurring_(event.source.userId);
     var recordedText = formatRecorded_(parsed.entries, recorder, parsed.statedTotal);
     try {
       var alerts = budgetAlerts_(parsed.entries, today);
@@ -3224,7 +3251,7 @@ function handleEvent_(event) {
   if (parsed.intent === 'recurring') {
     var recurringSetter = getDisplayName_(event.source);
     replyText_(event.replyToken, withLock_(function () {
-      return applyRecurringCommand_(parsed.recurring, today, recurringSetter);
+      return applyRecurringCommand_(parsed.recurring, today, recurringSetter, event.source.userId);
     }));
     return;
   }

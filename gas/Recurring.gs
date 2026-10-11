@@ -220,6 +220,17 @@ function ensureDailyTrigger_() {
  *   固定支出 刪除 Netflix             → 刪除
  * 「訂閱」開頭也可以。
  */
+var LAST_RECURRING_KEY = 'lastrec:';
+
+/** 10 分鐘內剛新增的固定支出（給「刪除」用），沒有回傳 null。 */
+function takeLastRecurring_(userId) {
+  var cache = CacheService.getScriptCache();
+  var raw = userId ? cache.get(LAST_RECURRING_KEY + userId) : null;
+  if (!raw) return null;
+  cache.remove(LAST_RECURRING_KEY + userId);
+  return JSON.parse(raw);
+}
+
 /**
  * 沒寫「固定支出」，但改的是已設定的固定項目：「修改 iCloud+ 扣款日期 每月3號」「Netflix 改成每月20號」。
  * 名稱要和固定支出／固定收入清單裡的項目一樣才算，回傳固定支出指令；否則回傳 null。
@@ -404,11 +415,11 @@ function listRecurringItems_() {
 }
 
 /** 執行固定支出指令，回傳要回覆的文字。 */
-function applyRecurringCommand_(cmd, today, setter) {
+function applyRecurringCommand_(cmd, today, setter, userId) {
   if (cmd.action === 'batch') {
     return cmd.cmds.map(function (c) {
       if (c.action === 'invalid') return '⚠️ 看不懂「' + (c.line || '') + '」，請寫成「名稱 金額 每月幾號」';
-      return applyRecurringCommand_(c, today, setter);
+      return applyRecurringCommand_(c, today, setter, userId);
     }).join('\n\n');
   }
   if (cmd.action === 'list') return formatRecurringList_();
@@ -476,6 +487,8 @@ function applyRecurringCommand_(cmd, today, setter) {
       owner: owner
     };
     sheet.appendRow([item.name, item.amount, item.category, item.day, item.every, item.next, '是', item.owner]);
+    // 剛新增完馬上傳「刪除」，刪的是這筆固定支出，而不是帳本裡最近一筆
+    if (userId) CacheService.getScriptCache().put(LAST_RECURRING_KEY + userId, JSON.stringify({ name: item.name, owner: item.owner }), 10 * 60);
     // 別的家人已經有同名項目：提醒這是另外一筆，避免房租這類共用支出算兩次
     var others = listRecurringItems_().filter(function (x) {
       return x.name.toLowerCase() === item.name.toLowerCase() && x.owner !== item.owner;
