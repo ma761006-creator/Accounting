@@ -420,7 +420,7 @@ function parseEntry_(segment, today, keywords) {
   var s = segment.replace(/^我\s*/, '');
 
   var date = today;
-  var dateMatch = matchDatePrefix_(s, today);
+  var dateMatch = matchDatePrefix_(s, today) || matchMonthPrefix_(s, today);
   if (dateMatch) {
     date = dateMatch.date;
     s = s.slice(dateMatch.length).trim();
@@ -483,6 +483,23 @@ function matchDatePrefix_(s, today) {
     return { date: date, length: md[0].length };
   }
   return null;
+}
+
+/** 開頭只有月份：「9月薪水」「3月份電費」→ 那個月的同一天（比今天晚就當作去年）。 */
+function matchMonthPrefix_(s, today) {
+  var m = s.match(/^(\d{1,2})月份?(?![\d號日])\s*/);
+  if (!m || +m[1] < 1 || +m[1] > 12) return null;
+  return { date: monthDate_(+m[1], today, today), length: m[0].length };
+}
+
+/** 把 baseDate 換到指定月份的同一天（月底自動調整）；比今天晚就當作去年。 */
+function monthDate_(month, baseDate, today) {
+  var day = +String(baseDate).slice(8, 10) || 1;
+  var make = function (y) {
+    return ymd_(y, month, Math.min(day, daysInMonth_(y, month)));
+  };
+  var y = +today.slice(0, 4);
+  return make(y) > today ? make(y - 1) : make(y);
 }
 
 /**
@@ -1917,13 +1934,14 @@ function formatBudgetSuggestion_(today) {
  *   修改 品項 早餐        → 最近一筆的品項改成早餐
  *   修改 午餐 150        → 最近一筆「午餐」的金額改成 150
  *   午餐改成150、鯖魚改成 餐飲
+ *   修改 日期 9/30、修改 薪水 月份 9月、薪水改成9月 → 改日期（只說月份就改到那個月的同一天）
  * 刪除：
  *   刪除                → 最近一次記的帳（同一則訊息的多筆一起刪）
  *   刪除 午餐            → 最近一筆「午餐」
  *   刪除 昨天 停車 60     → 昨天、品項含「停車」、金額 60 的那筆
  *
  * 回傳的指令物件：
- *   { action: 'edit', keyword, date, amount, newAmount, newCategory, newItem }
+ *   { action: 'edit', keyword, date, amount, newAmount, newCategory, newItem, newDate, newMonth }
  *   { action: 'delete', keyword, date, amount }
  *   { action: 'invalid', usage }
  */
@@ -1955,17 +1973,21 @@ function parseModifyCommand_(text, today) {
   var edit = t.match(/^(修改|更正|更改|改成)\s*(.*)$/);
   if (!inline && !edit) return null;
 
-  var cmd = { action: 'edit', keyword: '', date: '', amount: null, newAmount: null, newCategory: '', newItem: '' };
+  var cmd = { action: 'edit', keyword: '', date: '', amount: null, newAmount: null, newCategory: '', newItem: '', newDate: '', newMonth: 0 };
   var keywordPart;
   var changePart;
   if (inline && !edit) {
-    keywordPart = inline[1];
+    keywordPart = inline[1].replace(/的?(日期|月份)$/, '');
     changePart = inline[2];
   } else {
-    // 「修改 午餐 品項 早餐」「修改 150」「修改 午餐 金額 150」
+    // 「修改 午餐 品項 早餐」「修改 150」「修改 午餐 金額 150」「修改薪水月份為9月」
     var rest = edit[2].trim();
+    var dateMatch = rest.match(/^(.*?)\s*的?(?:日期|月份)\s*(?:改成|改為|為|成|到|[:：])?\s*(.+)$/);
     var itemMatch = rest.match(/^(.*?)\s*(?:品項|改名|名稱)\s*[:：]?\s*(.+)$/);
-    if (itemMatch) {
+    if (dateMatch) {
+      keywordPart = dateMatch[1];
+      changePart = dateMatch[2];
+    } else if (itemMatch) {
       keywordPart = itemMatch[1];
       cmd.newItem = itemMatch[2].trim();
       changePart = '';
@@ -1982,7 +2004,12 @@ function parseModifyCommand_(text, today) {
   var change = String(changePart || '').replace(/^(金額|分類)\s*[:：]?\s*/, '').trim();
   if (change) {
     var num = change.match(/^(\d+(?:\.\d+)?)\s*(元|塊錢|塊)?$/);
-    if (num) {
+    var newDate = parseDateValue_(change, today);
+    if (newDate) {
+      if (newDate.date > today) return { action: 'invalid', usage: modifyUsage_() };
+      cmd.newDate = newDate.date || '';
+      cmd.newMonth = newDate.month || 0;
+    } else if (num) {
       cmd.newAmount = Math.round(Number(num[1]));
     } else if (CATEGORIES.indexOf(change) >= 0) {
       cmd.newCategory = change;
@@ -1996,7 +2023,7 @@ function parseModifyCommand_(text, today) {
       cmd.newItem = change;
     }
   }
-  if (!(cmd.newAmount > 0) && !cmd.newCategory && !cmd.newItem) {
+  if (!(cmd.newAmount > 0) && !cmd.newCategory && !cmd.newItem && !cmd.newDate && !cmd.newMonth) {
     return { action: 'invalid', usage: modifyUsage_() };
   }
 
@@ -2006,6 +2033,18 @@ function parseModifyCommand_(text, today) {
   cmd.date = target2.date;
   cmd.amount = target2.amount;
   return cmd;
+}
+
+/** 要改成的日期：「9/30」「昨天」「2026-09-05」→ { date }；「9月」「上個月」→ { month }。 */
+function parseDateValue_(s, today) {
+  s = s.replace(/^(改成|改為|為|成|到)\s*/, '').trim();
+  var d = matchDatePrefix_(s, today);
+  if (d && d.length === s.length) return { date: d.date };
+  var m = s.match(/^(\d{1,2})月份?$/);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return { month: +m[1] };
+  if (/^(上個月|上月)$/.test(s)) return { month: (+today.slice(5, 7) + 10) % 12 + 1 };
+  if (/^(這個月|本月)$/.test(s)) return { month: +today.slice(5, 7) };
+  return null;
 }
 
 /** 「昨天 停車 60」→ { date, keyword, amount }，空字串代表「最近一筆」。 */
@@ -2166,6 +2205,7 @@ function applyUndo_(userId) {
     sheet.getRange(row, COL.category + 1).setValue(undo.before[COL.category]);
     sheet.getRange(row, COL.item + 1).setValue(undo.before[COL.item]);
     sheet.getRange(row, COL.amount + 1).setValue(undo.before[COL.amount]);
+    sheet.getRange(row, COL.date + 1).setValue(undo.before[COL.date]);
     cache.remove('undo:' + userId);
     return '↩️ 已恢復修改前的內容：' + undo.before[COL.date] + ' ' + undo.before[COL.category] + ' ' +
       undo.before[COL.item] + ' $' + formatMoney_(undo.before[COL.amount]);
@@ -2246,6 +2286,12 @@ function applyModifyCommand_(cmd, userId) {
     sheet.getRange(target.row, COL.item + 1).setValue(cmd.newItem);
     after[COL.item] = cmd.newItem;
   }
+  if (cmd.newDate || cmd.newMonth) {
+    var today = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+    var newDate = cmd.newDate || monthDate_(cmd.newMonth, beforeValues[COL.date], today);
+    sheet.getRange(target.row, COL.date + 1).setValue(newDate);
+    after[COL.date] = newDate;
+  }
   saveUndo_(userId, { type: 'edit', row: target.row, before: beforeValues, after: rowToText_(after) });
   return '✏️ 已修改\n・原本：' + before + '\n・改成：' + describeRow_(after) + '\n改錯了？傳「恢復」就能復原。';
 }
@@ -2256,6 +2302,7 @@ function modifyUsage_() {
     '・修改 150 → 最近一筆的金額',
     '・修改 交通 → 最近一筆的分類',
     '・修改 品項 早餐 → 最近一筆的品項',
+    '・修改 日期 9/30、修改 薪水 月份 9月 → 改日期',
     '・午餐改成150 → 最近一筆「午餐」',
     '',
     '刪除的用法：',
@@ -2313,6 +2360,14 @@ function parseMessage_(input, today) {
   }
   var result = validateParsed_(parsed, today);
   result.aiError = aiError;
+  // 「9月薪水 89000」：AI 有時只看到「薪水」而記成今天，開頭有月份就改成那個月
+  var month = input.text && result.intent === 'record' ? matchMonthPrefix_(normalizeText_(input.text).trim(), today) : null;
+  if (month) {
+    result.entries.forEach(function (e) {
+      if (e.date === today) e.date = month.date;
+      e.item = e.item.replace(/^\d{1,2}月份?\s*/, '') || e.item;
+    });
+  }
   return result;
 }
 
@@ -2521,7 +2576,7 @@ function buildSystemPrompt_(today) {
     '判斷 intent：',
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
     '  一則訊息可能有多筆，請逐筆列在 entries。金額一律為新台幣正整數。',
-    '  沒提到日期就用今天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
+    '  沒提到日期就用今天；只說月份（例如「9月薪水」）就用那個月的同一天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
     '  item、note 一律用繁體中文（例如 Lunch 寫「午餐」、简体字轉成繁體）；品牌與店名照原樣（例如 Netflix、7-11、全聯）。',
     '  訊息沒說用在哪裡（例如「我今天花了120元」）時不要猜，item 填「未說明」、category 填「其他」。',
     '  「金額 1125」「合計 1125」「總共 1125」這類總計行不是另一筆消費，不要記成 entries。',

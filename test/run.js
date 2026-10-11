@@ -1330,6 +1330,48 @@ test('預算：設定、使用狀況、記帳後提醒與 631 建議', () => {
   assert.strictEqual(env.claudeRequests.length, 0);
 });
 
+test('「9月薪水」記到 9 月，記錯月份可以改日期', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  const today = env.context.Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd');
+  const expect = (month) => env.context.monthDate_(month, today, today);
+  const dateOf = (r) => env.context.Utilities.formatDate(r[1], 'Asia/Taipei', 'yyyy-MM-dd');
+
+  env.post({ type: 'text', id: '1', text: '9月薪水 89000' });
+  let row = env.rows.find((r) => r[3] === '薪水');
+  assert.ok(row, JSON.stringify(env.rows));
+  assert.strictEqual(row[2], '收入');
+  assert.strictEqual(dateOf(row), expect(9));
+
+  const p = (t) => env.context.parseModifyCommand_(t, today);
+  assert.strictEqual(p('修改薪水月份為8月').newMonth, 8);
+  assert.strictEqual(p('修改薪水月份為8月').keyword, '薪水');
+  assert.strictEqual(p('薪水改成7月').newMonth, 7);
+  assert.strictEqual(p('修改 日期 昨天').newDate, env.context.addDays_(today, -1));
+  assert.strictEqual(p('修改 150').newAmount, 150);
+  assert.strictEqual(p('計畫改成明天'), null);
+
+  env.post({ type: 'text', id: '2', text: '修改薪水月份為8月' });
+  assert.match(env.replies[1], /已修改[\s\S]*改成：\d{4}-08-\d{2} 收入 薪水/);
+  row = env.rows.find((r) => r[3] === '薪水');
+  assert.strictEqual(dateOf(row), expect(8));
+  env.post({ type: 'text', id: '3', text: '恢復' });
+  assert.strictEqual(dateOf(env.rows.find((r) => r[3] === '薪水')), expect(9));
+});
+
+test('AI 把「9月薪水」記成今天時，改成 9 月', () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
+  const env = createEnv([{
+    intent: 'record',
+    entries: [{ date: today, category: '收入', item: '薪水', amount: 89000, note: '' }],
+    query: noQuery
+  }], { GEMINI_API_KEY: 'g' });
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '9月薪水 89000' });
+  const row = env.rows.find((r) => r[3] === '薪水');
+  assert.strictEqual(env.context.Utilities.formatDate(row[1], 'Asia/Taipei', 'yyyy-MM-dd'), env.context.monthDate_(9, today, today));
+});
+
 let failed = 0;
 for (const t of tests) {
   try {

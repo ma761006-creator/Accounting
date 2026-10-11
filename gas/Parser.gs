@@ -42,6 +42,14 @@ function parseMessage_(input, today) {
   }
   var result = validateParsed_(parsed, today);
   result.aiError = aiError;
+  // 「9月薪水 89000」：AI 有時只看到「薪水」而記成今天，開頭有月份就改成那個月
+  var month = input.text && result.intent === 'record' ? matchMonthPrefix_(normalizeText_(input.text).trim(), today) : null;
+  if (month) {
+    result.entries.forEach(function (e) {
+      if (e.date === today) e.date = month.date;
+      e.item = e.item.replace(/^\d{1,2}月份?\s*/, '') || e.item;
+    });
+  }
   return result;
 }
 
@@ -250,7 +258,7 @@ function buildSystemPrompt_(today) {
     '判斷 intent：',
     '- record：訊息在記錄花費（例如「午餐 120」「全聯 560 衛生紙」或收據照片）。',
     '  一則訊息可能有多筆，請逐筆列在 entries。金額一律為新台幣正整數。',
-    '  沒提到日期就用今天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
+    '  沒提到日期就用今天；只說月份（例如「9月薪水」）就用那個月的同一天。item 寫簡短品項或店名，note 放其他補充（沒有就空字串）。',
     '  item、note 一律用繁體中文（例如 Lunch 寫「午餐」、简体字轉成繁體）；品牌與店名照原樣（例如 Netflix、7-11、全聯）。',
     '  訊息沒說用在哪裡（例如「我今天花了120元」）時不要猜，item 填「未說明」、category 填「其他」。',
     '  「金額 1125」「合計 1125」「總共 1125」這類總計行不是另一筆消費，不要記成 entries。',

@@ -121,7 +121,7 @@ function parseEntry_(segment, today, keywords) {
   var s = segment.replace(/^我\s*/, '');
 
   var date = today;
-  var dateMatch = matchDatePrefix_(s, today);
+  var dateMatch = matchDatePrefix_(s, today) || matchMonthPrefix_(s, today);
   if (dateMatch) {
     date = dateMatch.date;
     s = s.slice(dateMatch.length).trim();
@@ -184,6 +184,23 @@ function matchDatePrefix_(s, today) {
     return { date: date, length: md[0].length };
   }
   return null;
+}
+
+/** 開頭只有月份：「9月薪水」「3月份電費」→ 那個月的同一天（比今天晚就當作去年）。 */
+function matchMonthPrefix_(s, today) {
+  var m = s.match(/^(\d{1,2})月份?(?![\d號日])\s*/);
+  if (!m || +m[1] < 1 || +m[1] > 12) return null;
+  return { date: monthDate_(+m[1], today, today), length: m[0].length };
+}
+
+/** 把 baseDate 換到指定月份的同一天（月底自動調整）；比今天晚就當作去年。 */
+function monthDate_(month, baseDate, today) {
+  var day = +String(baseDate).slice(8, 10) || 1;
+  var make = function (y) {
+    return ymd_(y, month, Math.min(day, daysInMonth_(y, month)));
+  };
+  var y = +today.slice(0, 4);
+  return make(y) > today ? make(y - 1) : make(y);
 }
 
 /**
