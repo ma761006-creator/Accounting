@@ -1452,8 +1452,15 @@ test('固定支出：「兩個月一次 10/2扣款」', () => {
   const n = env.context.nextFromAnchor_;
   assert.strictEqual(n('2026-10-11', 10, 2, 2), '2026-12-02');
   assert.strictEqual(n('2026-10-01', 10, 2, 2), '2026-10-02');
-  assert.strictEqual(n('2026-10-11', 12, 20, 2), '2026-10-20');
-  assert.strictEqual(n('2026-02-11', 12, 2, 2), '2026-04-02');
+  assert.strictEqual(n('2026-10-11', 12, 20, 2), '2026-12-20');
+  assert.strictEqual(n('2026-02-11', 12, 2, 2), '2026-12-02');
+  const d = p('固定支出 水費 下次扣款 12/11');
+  assert.deepStrictEqual([d.name, d.anchorMonth, d.day], ['水費', 12, 11]);
+  env.post({ type: 'text', id: 'w', text: '固定支出 水費 535 每2個月11號' });
+  env.post({ type: 'text', id: 'w2', text: '水費 下次扣款改成12/11' });
+  assert.match(env.replies[1], /水費（爸爸）｜\$535｜每 2 個月 11 號\n・下次扣款：/);
+  assert.ok(!env.rows.some((r) => /水費/.test(r[3])));
+  env.replies.length = 0;
   assert.strictEqual(env.context.addMonths_('2026-01-15', -2, 15), '2025-11-15');
   env.post({ type: 'text', id: '0', text: '固定支出 水費 800 每月20號扣款' });
   env.post({ type: 'text', id: '00', text: '水費 每兩個月扣款一次' });
