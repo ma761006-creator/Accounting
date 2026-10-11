@@ -1428,6 +1428,19 @@ test('查某個月與每月收支一覽', () => {
   assert.strictEqual(env.claudeRequests.length, 0);
 });
 
+test('沒寫「固定支出」也能改固定項目的扣款日', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '固定支出 iCloud+ 90 每月11號' });
+  env.post({ type: 'text', id: '2', text: '修改 iCloud+ 扣款日期 每月3號' });
+  assert.match(env.replies[1], /已更新固定支出[\s\S]*iCloud\+（爸爸）｜\$90｜每月 3 號/);
+  env.post({ type: 'text', id: '3', text: 'iCloud+ 改成每月5號' });
+  assert.match(env.replies[2], /每月 5 號/);
+  // 不是固定項目的名稱照常是修改帳目
+  assert.strictEqual(env.context.parseRecurringEditByName_('修改 午餐 每月3號'), null);
+  assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => r[0] === 'iCloud+').length, 1);
+});
+
 let failed = 0;
 for (const t of tests) {
   try {

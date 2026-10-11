@@ -992,6 +992,24 @@ function ensureDailyTrigger_() {
  *   固定支出 刪除 Netflix             → 刪除
  * 「訂閱」開頭也可以。
  */
+/**
+ * 沒寫「固定支出」，但改的是已設定的固定項目：「修改 iCloud+ 扣款日期 每月3號」「Netflix 改成每月20號」。
+ * 名稱要和固定支出／固定收入清單裡的項目一樣才算，回傳固定支出指令；否則回傳 null。
+ */
+function parseRecurringEditByName_(text) {
+  var t = normalizeText_(text).replace(/\s+/g, ' ').trim();
+  var m = t.match(/^(?:修改|更改|更新|調整|設定|改)?\s*(.+?)\s*的?\s*(?:扣款日期|扣款日|扣款|日期|週期)?\s*(?:改成|改為|改|為|成|到|[:：])?\s*(每(?:個)?(?:月|年|\d+\s*個月)[\s\S]*)$/);
+  if (!m) return null;
+  var name = m[1].trim().toLowerCase();
+  if (!name) return null;
+  var item = listRecurringItems_().filter(function (i) {
+    return i.name.toLowerCase() === name;
+  })[0];
+  if (!item) return null;
+  var kind = item.category === INCOME_CATEGORY ? '固定收入' : '固定支出';
+  return parseRecurringCommand_(kind + ' ' + item.name + ' ' + m[2]);
+}
+
 function parseRecurringCommand_(text) {
   var t = normalizeText_(text)
     .replace(/每個月/g, '每月')
@@ -3044,7 +3062,7 @@ function handleEvent_(event) {
       return;
     }
     var today0 = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
-    var recurringCmd = parseRecurringCommand_(text);
+    var recurringCmd = parseRecurringCommand_(text) || parseRecurringEditByName_(text);
     if (recurringCmd) {
       var setter = getDisplayName_(event.source);
       replyText_(event.replyToken, withLock_(function () {
