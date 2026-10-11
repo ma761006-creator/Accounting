@@ -1242,10 +1242,10 @@ function applyRecurringCommand_(cmd, today, setter, userId) {
     var oldCategory = String(r[RCOL.category]);
     var category = cmd.category || (CATEGORIES.indexOf(oldCategory) >= 0 || oldCategory === INCOME_CATEGORY ? oldCategory : '其他');
     var current = readRecurringRow_(r);
-    // 改了扣款日或週期，或原本沒有下次扣款日，就重新計算
+    // 改了扣款日，或原本沒有下次扣款日，就重新計算；只改週期的話，下次扣款日不變（這期可能已經扣過了）
     var next = cmd.month ? nextYearlyDate_(today, cmd.month, day)
       : cmd.anchorMonth ? nextFromAnchor_(today, cmd.anchorMonth, day, every)
-      : (cmd.day || cmd.every || !current || !current.next) ? firstDueDate_(today, day) : current.next;
+      : (cmd.day || !current || !current.next || current.next < today) ? firstDueDate_(today, day) : current.next;
     // 原本沒有成員（舊資料）的，改成這位家人的
     var rowOwner = String(r[RCOL.owner] || '').trim() || owner;
     item = { name: name, amount: amount, category: category, day: day, every: every, next: next, owner: rowOwner };

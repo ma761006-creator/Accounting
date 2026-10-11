@@ -1458,6 +1458,12 @@ test('固定支出：「兩個月一次 10/2扣款」', () => {
   env.post({ type: 'text', id: '0', text: '固定支出 水費 800 每月20號扣款' });
   env.post({ type: 'text', id: '00', text: '水費 每兩個月扣款一次' });
   assert.match(env.replies[1], /已更新固定支出[\s\S]*水費（爸爸）｜\$800｜每 2 個月 20 號/);
+  // 只改週期：下次扣款日維持原本的
+  const nextOf = () => env.context.listRecurringItems_().find((i) => i.name === '水費').next;
+  const before = nextOf();
+  env.post({ type: 'text', id: '00b', text: '水費 每兩個月扣款一次' });
+  assert.strictEqual(nextOf(), before);
+  env.replies.splice(2, 1);
   env.post({ type: 'text', id: '000', text: '固定支出 水費 每兩個月扣款一次' });
   assert.match(env.replies[2], /水費（爸爸）｜\$800｜每 2 個月 20 號/);
   assert.strictEqual(env.sheets['固定支出'].data.slice(1).filter((r) => /水費/.test(r[0])).length, 1);
