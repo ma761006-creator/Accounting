@@ -18,7 +18,9 @@ function parseBudgetCommand_(text) {
   var t = normalizeText_(text).replace(/\s+/g, ' ').trim();
   if (/^(631|631法則|預算(建議|分配|規劃))$/.test(t)) return { action: 'suggest' };
   var cats = CATEGORIES.join('|');
-  var m = t.match(new RegExp('^(?:每月|本月|這個月)?(' + cats + '|總)?預算\\s*(.*)$'));
+  // 「修改預算為 20000」「把餐飲預算改成 5000」「調整總預算 3萬」
+  var m = t.replace(/^(把|將)\s*/, '').replace(/^(修改|更改|更新|調整|設定|改)\s*/, '')
+    .match(new RegExp('^(?:每月|本月|這個月)?(' + cats + '|總)?預算\\s*(.*)$'));
   if (!m) return null;
   var category = m[1] && m[1] !== '總' ? m[1] : '';
   var rest = m[2];
@@ -27,7 +29,7 @@ function parseBudgetCommand_(text) {
     category = CATEGORIES.indexOf(c[1]) >= 0 ? c[1] : '';
     rest = c[2];
   }
-  rest = rest.replace(/^(設定|設為|改成|改為|是|為|[:：])\s*/, '').replace(/^(每月|一個月|每個月)\s*/, '').trim();
+  rest = rest.replace(/^(設定|設為|設成|改成|改為|調整為|調整成|調成|改|是|為|成|到|[:：])\s*/, '').replace(/^(每月|一個月|每個月)\s*/, '').trim();
   if (!rest) return { action: 'status' };
   if (/^(刪除|清除|取消)$/.test(rest)) return { action: 'clear', category: category };
   var pct = rest.match(/^(\d+(?:\.\d+)?)\s*[%％]$/);
