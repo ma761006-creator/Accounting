@@ -17,7 +17,17 @@ var FAMILY_RECORDER = '🏠 全家';
 /** 收入記在同一本帳裡，分類是「收入」；支出的統計都會排除它。 */
 var INCOME_CATEGORY = '收入';
 
-var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '其他'];
+var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '學費', '其他'];
+
+/**
+ * 不算在每月支出的分類：學期才繳一次的大筆費用，放進每月統計、預算、分析會失真。
+ * 查詢時另外列出「另計」，今年合計與年度計畫照算。
+ */
+var NON_MONTHLY_CATEGORIES = ['學費'];
+
+function isNonMonthly_(category) {
+  return NON_MONTHLY_CATEGORIES.indexOf(String(category)) >= 0;
+}
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
 

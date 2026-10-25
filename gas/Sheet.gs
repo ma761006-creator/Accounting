@@ -72,7 +72,8 @@ function readRows_() {
  */
 function summarize_(startDate, endDate, category, keyword) {
   // family：固定支出（全家共同），不算進個人
-  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, income: 0, rows: [] };
+  // extra：學費這類不算在每月支出的，另外加總
+  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, income: 0, extra: 0, rows: [] };
   var kw = String(keyword || '').toLowerCase();
   readRows_().forEach(function (r) {
     var date = r[COL.date];
@@ -81,6 +82,10 @@ function summarize_(startDate, endDate, category, keyword) {
     var isIncome = r[COL.category] === INCOME_CATEGORY;
     if (isIncome && category !== INCOME_CATEGORY) {
       if (category === '全部' && !kw) result.income += Number(r[COL.amount]) || 0;
+      return;
+    }
+    if (isNonMonthly_(r[COL.category]) && category !== r[COL.category]) {
+      if (category === '全部' && !kw) result.extra += Number(r[COL.amount]) || 0;
       return;
     }
     if (category !== '全部' && r[COL.category] !== category) return;
