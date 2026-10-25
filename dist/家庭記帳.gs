@@ -21,7 +21,17 @@ var FAMILY_RECORDER = '🏠 全家';
 /** 收入記在同一本帳裡，分類是「收入」；支出的統計都會排除它。 */
 var INCOME_CATEGORY = '收入';
 
-var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '其他'];
+var CATEGORIES = ['餐飲', '交通', '日用品', '醫療', '育兒', '旅遊', '娛樂', '寵物', '學費', '其他'];
+
+/**
+ * 不算在每月支出的分類：學期才繳一次的大筆費用，放進每月統計、預算、分析會失真。
+ * 查詢時另外列出「另計」，今年合計與年度計畫照算。
+ */
+var NON_MONTHLY_CATEGORIES = ['學費'];
+
+function isNonMonthly_(category) {
+  return NON_MONTHLY_CATEGORIES.indexOf(String(category)) >= 0;
+}
 
 var CLAUDE_MODEL = 'claude-haiku-5-5';
 
@@ -129,7 +139,8 @@ function readRows_() {
  */
 function summarize_(startDate, endDate, category, keyword) {
   // family：固定支出（全家共同），不算進個人
-  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, income: 0, rows: [] };
+  // extra：學費這類不算在每月支出的，另外加總
+  var result = { total: 0, count: 0, byCategory: {}, byRecorder: {}, family: 0, income: 0, extra: 0, rows: [] };
   var kw = String(keyword || '').toLowerCase();
   readRows_().forEach(function (r) {
     var date = r[COL.date];
@@ -138,6 +149,10 @@ function summarize_(startDate, endDate, category, keyword) {
     var isIncome = r[COL.category] === INCOME_CATEGORY;
     if (isIncome && category !== INCOME_CATEGORY) {
       if (category === '全部' && !kw) result.income += Number(r[COL.amount]) || 0;
+      return;
+    }
+    if (isNonMonthly_(r[COL.category]) && category !== r[COL.category]) {
+      if (category === '全部' && !kw) result.extra += Number(r[COL.amount]) || 0;
       return;
     }
     if (category !== '全部' && r[COL.category] !== category) return;
@@ -327,9 +342,10 @@ function getDefaultKeywords_() {
       '全聯', '家樂福', '好市多', 'costco', '屈臣氏', '康是美', '寶雅', '大創',
       '衛生紙', '洗衣精', '洗碗精', '牙膏', '牙刷', '洗髮精', '沐浴乳', '垃圾袋', '清潔', '電池'
     ],
+    '學費': ['學費', '學分費', '學雜費', '註冊費', '學貸'],
     '育兒': [
       '尿布', '紙尿褲', '奶粉', '奶瓶', '奶嘴', '副食品', '嬰兒', '寶寶', '幼兒', '兒童', '童裝', '童鞋',
-      '玩具', '繪本', '托嬰', '保母', '褓姆', '幼兒園', '幼稚園', '安親班', '才藝', '學費', '補習',
+      '玩具', '繪本', '托嬰', '保母', '褓姆', '幼兒園', '幼稚園', '安親班', '才藝', '補習',
       '親子', '麗嬰房', '玩具反斗城'
     ],
     '旅遊': [
@@ -1423,13 +1439,17 @@ function daysBetween_(a, b) {
 
 /** 統計一段期間，把固定支出和日常花費分開。 */
 function tally_(rows, start, end) {
-  var t = { total: 0, daily: 0, fixed: 0, income: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
+  var t = { total: 0, daily: 0, fixed: 0, income: 0, extra: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
   rows.forEach(function (r) {
     var date = r[COL.date];
     if (date < start || date > end) return;
     var amount = Number(r[COL.amount]) || 0;
     if (r[COL.category] === INCOME_CATEGORY) {
       t.income += amount;
+      return;
+    }
+    if (isNonMonthly_(r[COL.category])) {
+      t.extra += amount;
       return;
     }
     t.total += amount;
@@ -1487,6 +1507,7 @@ function formatAnalysis_(a) {
   } else {
     lines.push('💵 總支出 $' + formatMoney_(cur.total));
   }
+  if (cur.extra > 0) lines.push('📚 學費另計 $' + formatMoney_(cur.extra) + '（不算在每月支出）');
   if (cur.income > 0) {
     var saved = cur.income - cur.total;
     lines.push('💰 收入 $' + formatMoney_(cur.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) +
@@ -1600,16 +1621,17 @@ function formatMonthly_(today) {
     var d = String(r[COL.date]);
     if (+d.slice(0, 4) !== y) return;
     var m = +d.slice(5, 7);
-    var b = months[m] || (months[m] = { expense: 0, fixed: 0, income: 0 });
+    var b = months[m] || (months[m] = { expense: 0, fixed: 0, income: 0, extra: 0 });
     var amount = Number(r[COL.amount]) || 0;
     if (r[COL.category] === INCOME_CATEGORY) b.income += amount;
+    else if (isNonMonthly_(r[COL.category])) b.extra += amount;
     else {
       b.expense += amount;
       if (r[COL.source] === FIXED_SOURCE) b.fixed += amount;
     }
   });
   var lines = ['📅 ' + y + ' 每月收支'];
-  var total = { expense: 0, income: 0 };
+  var total = { expense: 0, income: 0, extra: 0 };
   var any = false;
   for (var m = 1; m <= thisMonth; m++) {
     var b = months[m];
@@ -1617,16 +1639,20 @@ function formatMonthly_(today) {
     any = true;
     total.expense += b.expense;
     total.income += b.income;
+    total.extra += b.extra;
     var net = b.income - b.expense;
     lines.push('', m + ' 月' + (m === thisMonth ? '（到今天）' : ''));
     lines.push('・支出 $' + formatMoney_(b.expense) + (b.fixed > 0 ? '（固定 $' + formatMoney_(b.fixed) + '）' : ''));
+    if (b.extra > 0) lines.push('・學費（另計）$' + formatMoney_(b.extra));
     if (b.income > 0) {
       lines.push('・收入 $' + formatMoney_(b.income) + '｜' + (net >= 0 ? '結餘 $' + formatMoney_(net) : '⚠️ 赤字 $' + formatMoney_(-net)));
     }
   }
   if (!any) return '今年還沒有記帳紀錄。';
-  var totalNet = total.income - total.expense;
-  lines.push('', '今年合計：支出 $' + formatMoney_(total.expense) + '｜收入 $' + formatMoney_(total.income) + '｜' +
+  // 今年合計：學費也是真的花掉的錢，結餘要扣
+  var totalNet = total.income - total.expense - total.extra;
+  lines.push('', '今年合計：支出 $' + formatMoney_(total.expense) + (total.extra > 0 ? '｜學費 $' + formatMoney_(total.extra) : '') +
+    '｜收入 $' + formatMoney_(total.income) + '｜' +
     (totalNet >= 0 ? '結餘 $' + formatMoney_(totalNet) : '赤字 $' + formatMoney_(-totalNet)));
   lines.push('', '看某個月：「9月」「9月 明細」「9月收入」「9月分析」');
   return lines.join('\n');
@@ -1982,7 +2008,7 @@ function budgetAlerts_(entries, today) {
   var month = today.slice(0, 7);
   var added = { total: 0 };
   entries.forEach(function (e) {
-    if (e.category === INCOME_CATEGORY || String(e.date).slice(0, 7) !== month) return;
+    if (e.category === INCOME_CATEGORY || isNonMonthly_(e.category) || String(e.date).slice(0, 7) !== month) return;
     added.total += e.amount;
     added[e.category] = (added[e.category] || 0) + e.amount;
   });
@@ -3040,7 +3066,8 @@ function buildSystemPrompt_(today) {
     '- 交通：油錢、停車、捷運、公車、高鐵、計程車、過路費、車輛保養',
     '- 日用品：清潔用品、衛生紙、盥洗用品、家用小物',
     '- 醫療：看診、掛號、藥品、保健食品、牙醫',
-    '- 育兒：尿布、奶粉、副食品、嬰幼兒用品、童裝、玩具、托嬰、幼兒園、安親班、才藝課、小孩的學費與疫苗以外的花費',
+    '- 育兒：尿布、奶粉、副食品、嬰幼兒用品、童裝、玩具、托嬰、幼兒園、安親班、才藝課、補習',
+    '- 學費：學費、學分費、學雜費、註冊費（學期才繳一次，不算在每月支出）',
     '- 旅遊：出國或國內旅行的住宿、機票、行程、門票、旅行社、伴手禮（旅途中的三餐、交通可依內容記成餐飲、交通）',
     '- 娛樂：電影、KTV、遊樂園、展覽、演唱會、健身房、運動、遊戲、影音串流、興趣嗜好',
     '- 寵物：飼料、罐頭、貓砂、寵物用品、美容、寄宿，以及寵物的看診、疫苗、結紮（不算醫療）',
@@ -3682,7 +3709,8 @@ function formatRecorded_(entries, recorder, statedTotal) {
       return '・' + e.date + '｜💰 收入｜' + e.item + '｜$' + formatMoney_(e.amount);
     }
     total += e.amount;
-    var line = '・' + e.date + '｜' + e.category + '｜' + e.item + '｜$' + formatMoney_(e.amount);
+    var line = '・' + e.date + '｜' + e.category + '｜' + e.item + '｜$' + formatMoney_(e.amount) +
+      (isNonMonthly_(e.category) ? '（不算在每月支出）' : '');
     if (e.note) line += '（' + e.note + '）';
     return line;
   });
@@ -3716,10 +3744,12 @@ function formatSummary_(q, s) {
 
   if (s.count === 0) {
     return title + '\n這段期間沒有' + (q.category === INCOME_CATEGORY ? '收入' : '支出') + '紀錄。' +
+      (s.extra > 0 ? '\n📚 學費另計 $' + formatMoney_(s.extra) : '') +
       (s.income > 0 ? '\n💰 收入 $' + formatMoney_(s.income) : '');
   }
 
   var lines = [title, (q.category === INCOME_CATEGORY ? '收入合計 $' : '總計 $') + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  if (s.extra > 0) lines.push('📚 學費另計 $' + formatMoney_(s.extra) + '（不算在每月支出）');
   if (s.income > 0) {
     var saved = s.income - s.total;
     lines.push('💰 收入 $' + formatMoney_(s.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) : '⚠️ 赤字 $' + formatMoney_(-saved)));

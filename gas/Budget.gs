@@ -175,7 +175,7 @@ function budgetAlerts_(entries, today) {
   var month = today.slice(0, 7);
   var added = { total: 0 };
   entries.forEach(function (e) {
-    if (e.category === INCOME_CATEGORY || String(e.date).slice(0, 7) !== month) return;
+    if (e.category === INCOME_CATEGORY || isNonMonthly_(e.category) || String(e.date).slice(0, 7) !== month) return;
     added.total += e.amount;
     added[e.category] = (added[e.category] || 0) + e.amount;
   });

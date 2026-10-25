@@ -1557,6 +1557,24 @@ test('購物計畫：想買的東西要存多久', () => {
   assert.ok(!/iPhone \$/.test(env.replies[3]));
 });
 
+test('學費不算在每月支出，另外列出', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '午餐 200' });
+  env.post({ type: 'text', id: '2', text: '學分費 30000' });
+  assert.match(env.replies[1], /學費｜學分費｜\$30,000（不算在每月支出）/);
+  env.post({ type: 'text', id: '3', text: '本月' });
+  assert.match(env.replies[2], /總計 \$200（1 筆）[\s\S]*📚 學費另計 \$30,000/);
+  env.post({ type: 'text', id: '4', text: '本月 學費' });
+  assert.match(env.replies[3], /總計 \$30,000/);
+  env.post({ type: 'text', id: '5', text: '每月' });
+  assert.match(env.replies[4], /・支出 \$200\n・學費（另計）\$30,000[\s\S]*今年合計：支出 \$200｜學費 \$30,000/);
+  env.post({ type: 'text', id: '6', text: '預算 1000' });
+  assert.match(env.replies[5], /已花 \$200（20%）/);
+  env.post({ type: 'text', id: '7', text: '分析' });
+  assert.match(env.replies[6], /📚 學費另計 \$30,000/);
+});
+
 let failed = 0;
 for (const t of tests) {
   try {

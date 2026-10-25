@@ -37,13 +37,17 @@ function daysBetween_(a, b) {
 
 /** 統計一段期間，把固定支出和日常花費分開。 */
 function tally_(rows, start, end) {
-  var t = { total: 0, daily: 0, fixed: 0, income: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
+  var t = { total: 0, daily: 0, fixed: 0, income: 0, extra: 0, count: 0, byCategory: {}, byRecorder: {}, fixedItems: {}, byDate: {}, maxRow: null };
   rows.forEach(function (r) {
     var date = r[COL.date];
     if (date < start || date > end) return;
     var amount = Number(r[COL.amount]) || 0;
     if (r[COL.category] === INCOME_CATEGORY) {
       t.income += amount;
+      return;
+    }
+    if (isNonMonthly_(r[COL.category])) {
+      t.extra += amount;
       return;
     }
     t.total += amount;
@@ -101,6 +105,7 @@ function formatAnalysis_(a) {
   } else {
     lines.push('💵 總支出 $' + formatMoney_(cur.total));
   }
+  if (cur.extra > 0) lines.push('📚 學費另計 $' + formatMoney_(cur.extra) + '（不算在每月支出）');
   if (cur.income > 0) {
     var saved = cur.income - cur.total;
     lines.push('💰 收入 $' + formatMoney_(cur.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) +
@@ -214,16 +219,17 @@ function formatMonthly_(today) {
     var d = String(r[COL.date]);
     if (+d.slice(0, 4) !== y) return;
     var m = +d.slice(5, 7);
-    var b = months[m] || (months[m] = { expense: 0, fixed: 0, income: 0 });
+    var b = months[m] || (months[m] = { expense: 0, fixed: 0, income: 0, extra: 0 });
     var amount = Number(r[COL.amount]) || 0;
     if (r[COL.category] === INCOME_CATEGORY) b.income += amount;
+    else if (isNonMonthly_(r[COL.category])) b.extra += amount;
     else {
       b.expense += amount;
       if (r[COL.source] === FIXED_SOURCE) b.fixed += amount;
     }
   });
   var lines = ['📅 ' + y + ' 每月收支'];
-  var total = { expense: 0, income: 0 };
+  var total = { expense: 0, income: 0, extra: 0 };
   var any = false;
   for (var m = 1; m <= thisMonth; m++) {
     var b = months[m];
@@ -231,16 +237,20 @@ function formatMonthly_(today) {
     any = true;
     total.expense += b.expense;
     total.income += b.income;
+    total.extra += b.extra;
     var net = b.income - b.expense;
     lines.push('', m + ' 月' + (m === thisMonth ? '（到今天）' : ''));
     lines.push('・支出 $' + formatMoney_(b.expense) + (b.fixed > 0 ? '（固定 $' + formatMoney_(b.fixed) + '）' : ''));
+    if (b.extra > 0) lines.push('・學費（另計）$' + formatMoney_(b.extra));
     if (b.income > 0) {
       lines.push('・收入 $' + formatMoney_(b.income) + '｜' + (net >= 0 ? '結餘 $' + formatMoney_(net) : '⚠️ 赤字 $' + formatMoney_(-net)));
     }
   }
   if (!any) return '今年還沒有記帳紀錄。';
-  var totalNet = total.income - total.expense;
-  lines.push('', '今年合計：支出 $' + formatMoney_(total.expense) + '｜收入 $' + formatMoney_(total.income) + '｜' +
+  // 今年合計：學費也是真的花掉的錢，結餘要扣
+  var totalNet = total.income - total.expense - total.extra;
+  lines.push('', '今年合計：支出 $' + formatMoney_(total.expense) + (total.extra > 0 ? '｜學費 $' + formatMoney_(total.extra) : '') +
+    '｜收入 $' + formatMoney_(total.income) + '｜' +
     (totalNet >= 0 ? '結餘 $' + formatMoney_(totalNet) : '赤字 $' + formatMoney_(-totalNet)));
   lines.push('', '看某個月：「9月」「9月 明細」「9月收入」「9月分析」');
   return lines.join('\n');

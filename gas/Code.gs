@@ -423,7 +423,8 @@ function formatRecorded_(entries, recorder, statedTotal) {
       return '・' + e.date + '｜💰 收入｜' + e.item + '｜$' + formatMoney_(e.amount);
     }
     total += e.amount;
-    var line = '・' + e.date + '｜' + e.category + '｜' + e.item + '｜$' + formatMoney_(e.amount);
+    var line = '・' + e.date + '｜' + e.category + '｜' + e.item + '｜$' + formatMoney_(e.amount) +
+      (isNonMonthly_(e.category) ? '（不算在每月支出）' : '');
     if (e.note) line += '（' + e.note + '）';
     return line;
   });
@@ -457,10 +458,12 @@ function formatSummary_(q, s) {
 
   if (s.count === 0) {
     return title + '\n這段期間沒有' + (q.category === INCOME_CATEGORY ? '收入' : '支出') + '紀錄。' +
+      (s.extra > 0 ? '\n📚 學費另計 $' + formatMoney_(s.extra) : '') +
       (s.income > 0 ? '\n💰 收入 $' + formatMoney_(s.income) : '');
   }
 
   var lines = [title, (q.category === INCOME_CATEGORY ? '收入合計 $' : '總計 $') + formatMoney_(s.total) + '（' + s.count + ' 筆）'];
+  if (s.extra > 0) lines.push('📚 學費另計 $' + formatMoney_(s.extra) + '（不算在每月支出）');
   if (s.income > 0) {
     var saved = s.income - s.total;
     lines.push('💰 收入 $' + formatMoney_(s.income) + '｜' + (saved >= 0 ? '結餘 $' + formatMoney_(saved) : '⚠️ 赤字 $' + formatMoney_(-saved)));
