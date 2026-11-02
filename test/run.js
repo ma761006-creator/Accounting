@@ -1575,6 +1575,21 @@ test('學費不算在每月支出，另外列出', () => {
   assert.match(env.replies[6], /📚 學費另計 \$30,000/);
 });
 
+test('多筆黏在一起沒有分隔也能拆開', () => {
+  const env = createEnv([], RULES);
+  env.context.setup();
+  env.post({ type: 'text', id: '1', text: '晚餐$150晚餐義大利麵$205飲料$120飲料$75' });
+  const items = env.rows.slice(1).map((r) => r[3] + ':' + r[4]);
+  assert.deepStrictEqual(items, ['晚餐:150', '晚餐義大利麵:205', '飲料:120', '飲料:75']);
+  assert.match(env.replies[0], /合計 \$550/);
+  env.post({ type: 'text', id: '2', text: '早餐80午餐120' });
+  assert.deepStrictEqual(env.rows.slice(-2).map((r) => r[3] + ':' + r[4]), ['早餐:80', '午餐:120']);
+  const g = env.context.splitGluedEntries_;
+  assert.strictEqual(g('7-11咖啡 50'), '7-11咖啡 50');
+  assert.strictEqual(g('牛奶2瓶 120'), '牛奶2瓶 120');
+  assert.strictEqual(g('飲料3杯150'), '飲料3杯150');
+});
+
 let failed = 0;
 for (const t of tests) {
   try {
