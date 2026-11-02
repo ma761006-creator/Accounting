@@ -25,6 +25,8 @@ function parseMessage_(input, today) {
   var aiError = '';
   // 按鈕和固定指令（本月、本週分析、本月 明細…）不需要 AI：省額度，AI 忙線時也照常運作
   if (input.text && isFixedCommand_(input.text)) provider = 'rules';
+  // 「晚餐$150晚餐義大利麵$205」：先在每個金額後面補分隔，AI 和規則辨識都比較不會黏成一筆
+  if (input.text) input = { text: splitDollarEntries_(input.text) };
   try {
     if (provider === 'gemini') {
       parsed = parseWithGemini_(input, today);

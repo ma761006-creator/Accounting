@@ -369,8 +369,30 @@ function getDefaultKeywords_() {
   };
 }
 
+/**
+ * 多筆黏在一起沒有分隔：「晚餐$150晚餐義大利麵$205飲料$120」→ 每個金額後面補「、」。
+ * 只在有兩個以上「$金額」時處理，避免動到一般句子。
+ */
+function splitDollarEntries_(text) {
+  var s = String(text);
+  if ((s.match(/\$\s*\d/g) || []).length < 2) return s;
+  return s.replace(/((?:NT)?\$\s*\d[\d,]*(?:\.\d+)?)(?=\s*[^\s\d、，,；;\n.])/gi, '$1、');
+}
+
+/**
+ * 「晚餐150晚餐義大利麵205」：金額後面直接接下一個品項（中文字）就拆開。
+ * 「7-11咖啡」「3杯」「5號」這類數字不拆。
+ */
+function splitGluedEntries_(t) {
+  if (!/\d\s*(元|塊錢|塊)?$/.test(t)) return t;
+  return t.replace(/(^|[^\d\-\/.:])(\d{2,}(?:\.\d+)?)(\s*(?:元|塊錢|塊))?(?=[\u4e00-\u9fff])(?![元塊號日月年點個次份杯片包瓶罐顆張件盒入折倍歲樓分秒週人支條台公斤克])/g,
+    function (all, pre, num, unit) {
+      return pre + num + (unit || '') + '、';
+    });
+}
+
 function parseWithRules_(text, today) {
-  var t = normalizeText_(text);
+  var t = normalizeText_(splitDollarEntries_(text));
   var analysis = parseAnalysis_(t, today);
   if (analysis) {
     return { intent: 'analysis', entries: [], query: analysis };
@@ -381,7 +403,7 @@ function parseWithRules_(text, today) {
   }
 
   var keywords = loadKeywords_();
-  var segments = t.split(/[、，,；;\n]+/).map(function (s) {
+  var segments = splitGluedEntries_(t).split(/[、，,；;\n]+/).map(function (s) {
     return s.trim();
   }).filter(function (s) {
     return s;
@@ -2843,6 +2865,8 @@ function parseMessage_(input, today) {
   var aiError = '';
   // 按鈕和固定指令（本月、本週分析、本月 明細…）不需要 AI：省額度，AI 忙線時也照常運作
   if (input.text && isFixedCommand_(input.text)) provider = 'rules';
+  // 「晚餐$150晚餐義大利麵$205」：先在每個金額後面補分隔，AI 和規則辨識都比較不會黏成一筆
+  if (input.text) input = { text: splitDollarEntries_(input.text) };
   try {
     if (provider === 'gemini') {
       parsed = parseWithGemini_(input, today);
